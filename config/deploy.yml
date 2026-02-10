@@ -5,16 +5,15 @@ servers:
   web:
     hosts:
       - 51.75.29.25
+    # No kamal-proxy — only accessible from localhost on the host.
+    proxy: false
     options:
-      publish:
-        - "127.0.0.1:3001:3001"
+      network: shared
+      network-alias: cut-optimizer
 
 # SSH user (not root).
 ssh:
   user: debian
-
-# No kamal-proxy — only accessible from localhost on the host.
-proxy: false
 
 registry:
   server: registry.hub.docker.com
