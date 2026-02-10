@@ -1,17 +1,23 @@
 service: cut-optimizer
-image: your-dockerhub-username/cut-optimizer
+image: silitix/cut-optimizer
 
 servers:
   web:
     hosts:
       - 51.75.29.25
+    options:
+      publish:
+        - "127.0.0.1:3001:3001"
 
-proxy:
-  host: 51.75.29.25
-  ssl: false
-  app_port: 3001
+# SSH user (not root).
+ssh:
+  user: debian
+
+# No kamal-proxy — only accessible from localhost on the host.
+proxy: false
 
 registry:
+  server: registry.hub.docker.com
   username: silitix
   password:
     - KAMAL_REGISTRY_PASSWORD

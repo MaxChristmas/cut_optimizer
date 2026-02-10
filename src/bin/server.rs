@@ -1,4 +1,4 @@
-use axum::{Json, Router, http::StatusCode, routing::post};
+use axum::{Json, Router, http::StatusCode, routing::{get, post}};
 use cut_optimizer::solver::Solver;
 use cut_optimizer::types::{Demand, Rect, Solution, deserialize_u32_from_number};
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,9 @@ async fn main() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
     let addr = format!("0.0.0.0:{port}");
 
-    let app = Router::new().route("/optimize", post(optimize));
+    let app = Router::new()
+        .route("/up", get(|| async { "ok" }))
+        .route("/optimize", post(optimize));
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     eprintln!("Listening on {addr}");
