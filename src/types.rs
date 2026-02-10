@@ -1,6 +1,32 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use serde::{Deserialize, Deserializer, Serialize};
+
+pub fn deserialize_u32_from_number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Number(n) => {
+            if let Some(v) = n.as_u64() {
+                u32::try_from(v).map_err(serde::de::Error::custom)
+            } else if let Some(v) = n.as_f64() {
+                if v >= 0.0 && v <= u32::MAX as f64 && v.fract() == 0.0 {
+                    Ok(v as u32)
+                } else {
+                    Err(serde::de::Error::custom(format!(
+                        "expected a non-negative whole number, got {v}"
+                    )))
+                }
+            } else {
+                Err(serde::de::Error::custom("invalid number"))
+            }
+        }
+        _ => Err(serde::de::Error::custom("expected a number")),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rect {
+    #[serde(deserialize_with = "deserialize_u32_from_number")]
     pub w: u32,
+    #[serde(deserialize_with = "deserialize_u32_from_number")]
     pub h: u32,
 }
 
@@ -31,14 +57,14 @@ impl std::fmt::Display for Rect {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Demand {
     pub rect: Rect,
     pub qty: u32,
     pub allow_rotate: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Placement {
     pub rect: Rect,
     pub x: u32,
@@ -46,14 +72,14 @@ pub struct Placement {
     pub rotated: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetResult {
     pub placements: Vec<Placement>,
     #[allow(dead_code)]
     pub waste_area: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Solution {
     pub sheets: Vec<SheetResult>,
     pub stock: Rect,

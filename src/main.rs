@@ -1,11 +1,7 @@
-mod guillotine;
-mod render;
-mod solver;
-mod types;
-
 use clap::Parser;
-use solver::Solver;
-use types::{Demand, Rect};
+use cut_optimizer::render;
+use cut_optimizer::solver::Solver;
+use cut_optimizer::types::{Demand, Rect};
 
 #[derive(Parser)]
 #[command(
