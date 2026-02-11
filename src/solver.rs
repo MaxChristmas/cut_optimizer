@@ -232,7 +232,63 @@ impl Solver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Demand;
+    use crate::types::{Demand, Placement};
+
+    /// Validates a complete solution:
+    /// 1. Every placement fits within the stock dimensions
+    /// 2. No two placements on the same sheet overlap
+    /// 3. The total number of placed pieces matches expectations
+    fn assert_solution_valid(sol: &Solution, expected_pieces: usize) {
+        let stock = sol.stock;
+        let total_placed: usize = sol.sheets.iter().map(|s| s.placements.len()).sum();
+        assert_eq!(
+            total_placed, expected_pieces,
+            "expected {} pieces placed, got {}",
+            expected_pieces, total_placed
+        );
+
+        for (si, sheet) in sol.sheets.iter().enumerate() {
+            for (pi, p) in sheet.placements.iter().enumerate() {
+                // Check bounds
+                assert!(
+                    p.x + p.rect.length <= stock.length,
+                    "sheet {si}, piece {pi} ({}) exceeds stock length: x={} + length={} > {}",
+                    p.rect, p.x, p.rect.length, stock.length
+                );
+                assert!(
+                    p.y + p.rect.width <= stock.width,
+                    "sheet {si}, piece {pi} ({}) exceeds stock width: y={} + width={} > {}",
+                    p.rect, p.y, p.rect.width, stock.width
+                );
+            }
+
+            // Check no overlaps between any pair of placements
+            assert_no_overlaps(si, &sheet.placements);
+        }
+    }
+
+    fn assert_no_overlaps(sheet_idx: usize, placements: &[Placement]) {
+        for i in 0..placements.len() {
+            for j in (i + 1)..placements.len() {
+                let a = &placements[i];
+                let b = &placements[j];
+
+                let a_x_end = a.x + a.rect.length;
+                let a_y_end = a.y + a.rect.width;
+                let b_x_end = b.x + b.rect.length;
+                let b_y_end = b.y + b.rect.width;
+
+                let overlaps = a.x < b_x_end && b.x < a_x_end
+                    && a.y < b_y_end && b.y < a_y_end;
+
+                assert!(
+                    !overlaps,
+                    "sheet {sheet_idx}: piece {i} ({} @ ({},{})) overlaps piece {j} ({} @ ({},{}))",
+                    a.rect, a.x, a.y, b.rect, b.x, b.y
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_single_piece() {
@@ -246,8 +302,8 @@ mod tests {
             }],
         );
         let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
         assert_eq!(sol.sheet_count(), 1);
-        assert_eq!(sol.sheets[0].placements.len(), 1);
     }
 
     #[test]
@@ -262,6 +318,7 @@ mod tests {
             }],
         );
         let sol = solver.solve();
+        assert_solution_valid(&sol, 4);
         assert_eq!(sol.sheet_count(), 1);
     }
 
@@ -277,6 +334,7 @@ mod tests {
             }],
         );
         let sol = solver.solve();
+        assert_solution_valid(&sol, 4);
         // Each sheet can fit at most 1 piece (60x60 leaves 40x100 and 60x40 — no room for another 60x60)
         assert!(sol.sheet_count() >= 4);
     }
@@ -294,6 +352,7 @@ mod tests {
             }],
         );
         let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
         assert_eq!(sol.sheet_count(), 1);
         assert!(sol.sheets[0].placements[0].rotated);
     }
@@ -302,7 +361,7 @@ mod tests {
     fn test_no_demands() {
         let solver = Solver::new(Rect::new(100, 100), 0, vec![]);
         let sol = solver.solve();
-        assert_eq!(sol.sheet_count(), 0);
+        assert_solution_valid(&sol, 0);
     }
 
     #[test]
@@ -317,7 +376,9 @@ mod tests {
                 allow_rotate: false,
             }],
         );
-        assert_eq!(solver_no_kerf.solve().sheet_count(), 1);
+        let sol_no_kerf = solver_no_kerf.solve();
+        assert_solution_valid(&sol_no_kerf, 2);
+        assert_eq!(sol_no_kerf.sheet_count(), 1);
 
         // With kerf of 5: 50 + 5 + 50 = 105 > 100, needs 2 sheets
         let solver_kerf = Solver::new(
@@ -329,7 +390,9 @@ mod tests {
                 allow_rotate: false,
             }],
         );
-        assert_eq!(solver_kerf.solve().sheet_count(), 2);
+        let sol_kerf = solver_kerf.solve();
+        assert_solution_valid(&sol_kerf, 2);
+        assert_eq!(sol_kerf.sheet_count(), 2);
     }
 
     #[test]
@@ -344,6 +407,139 @@ mod tests {
             }],
         );
         let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
         assert!((sol.total_waste_percent() - 0.0).abs() < 0.01);
+    }
+
+    /// 30 pieces, 6 different sizes, standard plywood sheet 2440x1220, no kerf.
+    /// Verifies all pieces are placed and no placement overlaps or exceeds the stock.
+    #[test]
+    fn test_complex_mixed_sizes_no_kerf() {
+        let stock = Rect::new(2440, 1220);
+        let demands = vec![
+            Demand { rect: Rect::new(800, 600), qty: 5, allow_rotate: true },
+            Demand { rect: Rect::new(400, 300), qty: 8, allow_rotate: true },
+            Demand { rect: Rect::new(600, 400), qty: 4, allow_rotate: true },
+            Demand { rect: Rect::new(1200, 600), qty: 3, allow_rotate: true },
+            Demand { rect: Rect::new(300, 200), qty: 6, allow_rotate: true },
+            Demand { rect: Rect::new(500, 500), qty: 4, allow_rotate: false },
+        ];
+        let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
+        assert_eq!(total_pieces, 30);
+
+        let solver = Solver::new(stock, 0, demands);
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 30);
+
+        // Lower bound: total piece area / stock area
+        let total_area: u64 = sol.sheets.iter()
+            .flat_map(|s| &s.placements)
+            .map(|p| p.rect.area())
+            .sum();
+        let min_sheets = total_area.div_ceil(stock.area()) as usize;
+        assert!(sol.sheet_count() >= min_sheets);
+    }
+
+    /// 35 pieces, 7 different sizes, with kerf=3.
+    /// Kerf eats into available space, so more sheets are needed.
+    #[test]
+    fn test_complex_mixed_sizes_with_kerf() {
+        let stock = Rect::new(2440, 1220);
+        let demands = vec![
+            Demand { rect: Rect::new(700, 500), qty: 6, allow_rotate: true },
+            Demand { rect: Rect::new(350, 250), qty: 5, allow_rotate: true },
+            Demand { rect: Rect::new(1000, 400), qty: 3, allow_rotate: true },
+            Demand { rect: Rect::new(450, 450), qty: 4, allow_rotate: false },
+            Demand { rect: Rect::new(600, 300), qty: 7, allow_rotate: true },
+            Demand { rect: Rect::new(250, 150), qty: 5, allow_rotate: true },
+            Demand { rect: Rect::new(800, 400), qty: 5, allow_rotate: true },
+        ];
+        let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
+        assert_eq!(total_pieces, 35);
+
+        let solver = Solver::new(stock, 3, demands);
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 35);
+    }
+
+    /// 40 pieces, 8 different sizes, rotation disabled for all.
+    /// Without rotation the solver has less flexibility, requiring more sheets.
+    #[test]
+    fn test_complex_no_rotation() {
+        let stock = Rect::new(2440, 1220);
+        let demands = vec![
+            Demand { rect: Rect::new(1200, 600), qty: 4, allow_rotate: false },
+            Demand { rect: Rect::new(800, 400), qty: 6, allow_rotate: false },
+            Demand { rect: Rect::new(600, 300), qty: 5, allow_rotate: false },
+            Demand { rect: Rect::new(400, 400), qty: 3, allow_rotate: false },
+            Demand { rect: Rect::new(500, 250), qty: 7, allow_rotate: false },
+            Demand { rect: Rect::new(300, 200), qty: 5, allow_rotate: false },
+            Demand { rect: Rect::new(700, 350), qty: 6, allow_rotate: false },
+            Demand { rect: Rect::new(250, 150), qty: 4, allow_rotate: false },
+        ];
+        let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
+        assert_eq!(total_pieces, 40);
+
+        let solver = Solver::new(stock, 0, demands.clone());
+        let sol_no_rot = solver.solve();
+        assert_solution_valid(&sol_no_rot, 40);
+
+        // Compare with rotation enabled — should use <= sheets
+        let demands_rot: Vec<Demand> = demands.into_iter()
+            .map(|d| Demand { allow_rotate: true, ..d })
+            .collect();
+        let solver_rot = Solver::new(stock, 0, demands_rot);
+        let sol_rot = solver_rot.solve();
+        assert_solution_valid(&sol_rot, 40);
+        assert!(sol_rot.sheet_count() <= sol_no_rot.sheet_count());
+    }
+
+    /// 50 pieces, 10 different sizes, kerf=4, mix of rotation allowed/disallowed.
+    #[test]
+    fn test_complex_large_batch_mixed_rotation() {
+        let stock = Rect::new(3000, 1500);
+        let demands = vec![
+            Demand { rect: Rect::new(900, 600), qty: 5, allow_rotate: true },
+            Demand { rect: Rect::new(500, 400), qty: 6, allow_rotate: false },
+            Demand { rect: Rect::new(700, 350), qty: 4, allow_rotate: true },
+            Demand { rect: Rect::new(1200, 500), qty: 3, allow_rotate: true },
+            Demand { rect: Rect::new(300, 300), qty: 8, allow_rotate: false },
+            Demand { rect: Rect::new(450, 200), qty: 6, allow_rotate: true },
+            Demand { rect: Rect::new(600, 450), qty: 5, allow_rotate: false },
+            Demand { rect: Rect::new(800, 300), qty: 4, allow_rotate: true },
+            Demand { rect: Rect::new(350, 250), qty: 5, allow_rotate: true },
+            Demand { rect: Rect::new(1000, 700), qty: 4, allow_rotate: false },
+        ];
+        let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
+        assert_eq!(total_pieces, 50);
+
+        let solver = Solver::new(stock, 4, demands);
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 50);
+
+        assert!(sol.total_waste_percent() < 100.0);
+        assert!(sol.total_waste_percent() >= 0.0);
+    }
+
+    /// 32 pieces, 5 different sizes, small stock forcing many sheets.
+    #[test]
+    fn test_complex_small_stock_many_sheets() {
+        let stock = Rect::new(500, 400);
+        let demands = vec![
+            Demand { rect: Rect::new(200, 150), qty: 8, allow_rotate: true },
+            Demand { rect: Rect::new(300, 200), qty: 6, allow_rotate: true },
+            Demand { rect: Rect::new(150, 100), qty: 7, allow_rotate: true },
+            Demand { rect: Rect::new(250, 180), qty: 5, allow_rotate: true },
+            Demand { rect: Rect::new(400, 300), qty: 6, allow_rotate: true },
+        ];
+        let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
+        assert_eq!(total_pieces, 32);
+
+        let solver = Solver::new(stock, 0, demands);
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 32);
+
+        // With small stock and large pieces, we need many sheets
+        assert!(sol.sheet_count() >= 5);
     }
 }
