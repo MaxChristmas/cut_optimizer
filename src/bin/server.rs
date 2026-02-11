@@ -41,7 +41,7 @@ struct SheetResponse {
 async fn optimize(
     Json(req): Json<OptimizeRequest>,
 ) -> Result<Json<OptimizeResponse>, (StatusCode, String)> {
-    if req.stock.w == 0 || req.stock.h == 0 {
+    if req.stock.length == 0 || req.stock.width == 0 {
         return Err((
             StatusCode::BAD_REQUEST,
             "stock dimensions must be non-zero".to_string(),
@@ -52,7 +52,7 @@ async fn optimize(
         .cuts
         .into_iter()
         .map(|c| {
-            if c.rect.w == 0 || c.rect.h == 0 {
+            if c.rect.length == 0 || c.rect.width == 0 {
                 return Err("cut dimensions must be non-zero".to_string());
             }
             if c.qty == 0 {
@@ -63,7 +63,7 @@ async fn optimize(
             if !fits_normal && !fits_rotated {
                 return Err(format!(
                     "piece {}x{} does not fit in stock {}x{}",
-                    c.rect.w, c.rect.h, req.stock.w, req.stock.h
+                    c.rect.length, c.rect.width, req.stock.length, req.stock.width
                 ));
             }
             Ok(Demand {

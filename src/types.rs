@@ -25,35 +25,35 @@ pub fn deserialize_u32_from_number<'de, D: Deserializer<'de>>(deserializer: D) -
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rect {
     #[serde(deserialize_with = "deserialize_u32_from_number")]
-    pub w: u32,
+    pub length: u32,
     #[serde(deserialize_with = "deserialize_u32_from_number")]
-    pub h: u32,
+    pub width: u32,
 }
 
 impl Rect {
-    pub fn new(w: u32, h: u32) -> Self {
-        Self { w, h }
+    pub fn new(length: u32, width: u32) -> Self {
+        Self { length, width }
     }
 
     pub fn area(&self) -> u64 {
-        self.w as u64 * self.h as u64
+        self.length as u64 * self.width as u64
     }
 
     pub fn rotated(&self) -> Self {
         Self {
-            w: self.h,
-            h: self.w,
+            length: self.width,
+            width: self.length,
         }
     }
 
     pub fn fits_in(&self, other: &Rect) -> bool {
-        self.w <= other.w && self.h <= other.h
+        self.length <= other.length && self.width <= other.width
     }
 }
 
 impl std::fmt::Display for Rect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}x{}", self.w, self.h)
+        write!(f, "{}x{}", self.length, self.width)
     }
 }
 

@@ -4,9 +4,9 @@ const MAX_WIDTH: f64 = 80.0;
 const MAX_HEIGHT: f64 = 40.0;
 
 pub fn render_sheet(stock: Rect, placements: &[Placement]) -> String {
-    let scale = f64::min(MAX_WIDTH / stock.w as f64, MAX_HEIGHT / stock.h as f64);
-    let grid_w = (stock.w as f64 * scale).round() as usize;
-    let grid_h = (stock.h as f64 * scale).round() as usize;
+    let scale = f64::min(MAX_WIDTH / stock.length as f64, MAX_HEIGHT / stock.width as f64);
+    let grid_w = (stock.length as f64 * scale).round() as usize;
+    let grid_h = (stock.width as f64 * scale).round() as usize;
 
     if grid_w == 0 || grid_h == 0 {
         return String::new();
@@ -21,8 +21,8 @@ pub fn render_sheet(stock: Rect, placements: &[Placement]) -> String {
     for p in placements {
         let sx = (p.x as f64 * scale).round() as usize;
         let sy = (p.y as f64 * scale).round() as usize;
-        let sw = (p.rect.w as f64 * scale).round() as usize;
-        let sh = (p.rect.h as f64 * scale).round() as usize;
+        let sw = (p.rect.length as f64 * scale).round() as usize;
+        let sh = (p.rect.width as f64 * scale).round() as usize;
 
         if sw == 0 || sh == 0 {
             continue;
@@ -31,7 +31,7 @@ pub fn render_sheet(stock: Rect, placements: &[Placement]) -> String {
         draw_rect(&mut grid, sx, sy, sw, sh);
 
         // Label
-        let label = format!("{}x{}", p.rect.w, p.rect.h);
+        let label = format!("{}x{}", p.rect.length, p.rect.width);
         let label_chars: Vec<char> = label.chars().collect();
 
         if sw > 2 && sh > 0 {

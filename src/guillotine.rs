@@ -92,17 +92,17 @@ impl GuillotineBin {
         match strategy {
             ScoreStrategy::BestAreaFit => {
                 let area_diff = free.area() - piece.area();
-                let short_side = std::cmp::min(free.w - piece.w, free.h - piece.h) as u64;
+                let short_side = std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
                 (area_diff, short_side)
             }
             ScoreStrategy::BestShortSideFit => {
-                let short = std::cmp::min(free.w - piece.w, free.h - piece.h) as u64;
-                let long = std::cmp::max(free.w - piece.w, free.h - piece.h) as u64;
+                let short = std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
+                let long = std::cmp::max(free.length - piece.length, free.width - piece.width) as u64;
                 (short, long)
             }
             ScoreStrategy::BestLongSideFit => {
-                let long = std::cmp::max(free.w - piece.w, free.h - piece.h) as u64;
-                let short = std::cmp::min(free.w - piece.w, free.h - piece.h) as u64;
+                let long = std::cmp::max(free.length - piece.length, free.width - piece.width) as u64;
+                let short = std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
                 (long, short)
             }
         }
@@ -133,52 +133,52 @@ impl GuillotineBin {
     }
 
     fn split(&mut self, free: FreeRect, placed: Rect) {
-        let right_w = free.rect.w.saturating_sub(placed.w + self.kerf);
-        let bottom_h = free.rect.h.saturating_sub(placed.h + self.kerf);
+        let right_l = free.rect.length.saturating_sub(placed.length + self.kerf);
+        let bottom_w = free.rect.width.saturating_sub(placed.width + self.kerf);
 
         // Use shorter leftover axis split
-        if right_w > 0 && bottom_h > 0 {
+        if right_l > 0 && bottom_w > 0 {
             // Decide split direction: shorter leftover axis
-            if free.rect.w - placed.w < free.rect.h - placed.h {
-                // Split horizontally: right rect is narrow, bottom rect spans full width
+            if free.rect.length - placed.length < free.rect.width - placed.width {
+                // Split horizontally: right rect is narrow, bottom rect spans full length
                 // Right remainder
                 self.free_rects.push(FreeRect {
-                    x: free.x + placed.w + self.kerf,
+                    x: free.x + placed.length + self.kerf,
                     y: free.y,
-                    rect: Rect::new(right_w, placed.h),
+                    rect: Rect::new(right_l, placed.width),
                 });
                 // Bottom remainder
                 self.free_rects.push(FreeRect {
                     x: free.x,
-                    y: free.y + placed.h + self.kerf,
-                    rect: Rect::new(free.rect.w, bottom_h),
+                    y: free.y + placed.width + self.kerf,
+                    rect: Rect::new(free.rect.length, bottom_w),
                 });
             } else {
-                // Split vertically: bottom rect is narrow, right rect spans full height
+                // Split vertically: bottom rect is narrow, right rect spans full width
                 // Right remainder
                 self.free_rects.push(FreeRect {
-                    x: free.x + placed.w + self.kerf,
+                    x: free.x + placed.length + self.kerf,
                     y: free.y,
-                    rect: Rect::new(right_w, free.rect.h),
+                    rect: Rect::new(right_l, free.rect.width),
                 });
                 // Bottom remainder
                 self.free_rects.push(FreeRect {
                     x: free.x,
-                    y: free.y + placed.h + self.kerf,
-                    rect: Rect::new(placed.w, bottom_h),
+                    y: free.y + placed.width + self.kerf,
+                    rect: Rect::new(placed.length, bottom_w),
                 });
             }
-        } else if right_w > 0 {
+        } else if right_l > 0 {
             self.free_rects.push(FreeRect {
-                x: free.x + placed.w + self.kerf,
+                x: free.x + placed.length + self.kerf,
                 y: free.y,
-                rect: Rect::new(right_w, free.rect.h),
+                rect: Rect::new(right_l, free.rect.width),
             });
-        } else if bottom_h > 0 {
+        } else if bottom_w > 0 {
             self.free_rects.push(FreeRect {
                 x: free.x,
-                y: free.y + placed.h + self.kerf,
-                rect: Rect::new(free.rect.w, bottom_h),
+                y: free.y + placed.width + self.kerf,
+                rect: Rect::new(free.rect.length, bottom_w),
             });
         }
     }
@@ -201,37 +201,37 @@ impl GuillotineBin {
     }
 
     fn try_merge(a: FreeRect, b: FreeRect) -> Option<FreeRect> {
-        // Merge horizontally: same y, same height, adjacent x
-        if a.y == b.y && a.rect.h == b.rect.h {
-            if a.x + a.rect.w == b.x {
+        // Merge horizontally: same y, same width, adjacent x
+        if a.y == b.y && a.rect.width == b.rect.width {
+            if a.x + a.rect.length == b.x {
                 return Some(FreeRect {
                     x: a.x,
                     y: a.y,
-                    rect: Rect::new(a.rect.w + b.rect.w, a.rect.h),
+                    rect: Rect::new(a.rect.length + b.rect.length, a.rect.width),
                 });
             }
-            if b.x + b.rect.w == a.x {
+            if b.x + b.rect.length == a.x {
                 return Some(FreeRect {
                     x: b.x,
                     y: b.y,
-                    rect: Rect::new(a.rect.w + b.rect.w, a.rect.h),
+                    rect: Rect::new(a.rect.length + b.rect.length, a.rect.width),
                 });
             }
         }
-        // Merge vertically: same x, same width, adjacent y
-        if a.x == b.x && a.rect.w == b.rect.w {
-            if a.y + a.rect.h == b.y {
+        // Merge vertically: same x, same length, adjacent y
+        if a.x == b.x && a.rect.length == b.rect.length {
+            if a.y + a.rect.width == b.y {
                 return Some(FreeRect {
                     x: a.x,
                     y: a.y,
-                    rect: Rect::new(a.rect.w, a.rect.h + b.rect.h),
+                    rect: Rect::new(a.rect.length, a.rect.width + b.rect.width),
                 });
             }
-            if b.y + b.rect.h == a.y {
+            if b.y + b.rect.width == a.y {
                 return Some(FreeRect {
                     x: b.x,
                     y: b.y,
-                    rect: Rect::new(a.rect.w, a.rect.h + b.rect.h),
+                    rect: Rect::new(a.rect.length, a.rect.width + b.rect.width),
                 });
             }
         }
@@ -253,8 +253,8 @@ mod tests {
         let p = bin.place(scored, piece);
         assert_eq!(p.x, 0);
         assert_eq!(p.y, 0);
-        assert_eq!(p.rect.w, 50);
-        assert_eq!(p.rect.h, 30);
+        assert_eq!(p.rect.length, 50);
+        assert_eq!(p.rect.width, 30);
         assert!(!bin.free_rects.is_empty());
     }
 
@@ -293,7 +293,7 @@ mod tests {
             .unwrap();
         bin.place(scored, piece);
         // Remaining width should be 100 - 50 - 5 = 45
-        let has_45_wide = bin.free_rects.iter().any(|f| f.rect.w == 45);
+        let has_45_wide = bin.free_rects.iter().any(|f| f.rect.length == 45);
         assert!(has_45_wide);
     }
 

@@ -9,11 +9,11 @@ use cut_optimizer::types::{Demand, Rect};
     about = "2D rectangular cutting stock optimizer"
 )]
 struct Cli {
-    /// Stock sheet dimensions (WxH, e.g. 2400x1200)
+    /// Stock sheet dimensions (LxW, e.g. 2400x1200)
     #[arg(long)]
     stock: String,
 
-    /// Cut pieces as WxH:qty (e.g. 800x600:3 400x300:5)
+    /// Cut pieces as LxW:qty (e.g. 800x600:3 400x300:5)
     #[arg(long = "cuts", num_args = 1..)]
     cuts: Vec<String>,
 
@@ -33,24 +33,24 @@ struct Cli {
 fn parse_dimensions(s: &str) -> Result<Rect, String> {
     let parts: Vec<&str> = s.split('x').collect();
     if parts.len() != 2 {
-        return Err(format!("invalid dimensions '{}', expected WxH", s));
+        return Err(format!("invalid dimensions '{}', expected LxW", s));
     }
-    let w = parts[0]
+    let length = parts[0]
+        .parse::<u32>()
+        .map_err(|_| format!("invalid length in '{}'", s))?;
+    let width = parts[1]
         .parse::<u32>()
         .map_err(|_| format!("invalid width in '{}'", s))?;
-    let h = parts[1]
-        .parse::<u32>()
-        .map_err(|_| format!("invalid height in '{}'", s))?;
-    if w == 0 || h == 0 {
+    if length == 0 || width == 0 {
         return Err(format!("dimensions must be non-zero in '{}'", s));
     }
-    Ok(Rect::new(w, h))
+    Ok(Rect::new(length, width))
 }
 
 fn parse_cut(s: &str, allow_rotate: bool) -> Result<Demand, String> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 2 {
-        return Err(format!("invalid cut '{}', expected WxH:qty", s));
+        return Err(format!("invalid cut '{}', expected LxW:qty", s));
     }
     let rect = parse_dimensions(parts[0])?;
     let qty = parts[1]

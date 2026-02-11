@@ -178,7 +178,7 @@ impl Solver {
 
         // Try placing in each existing bin
         for bi in 0..bins.len() {
-            let orientations: &[bool] = if allow_rotate && piece.w != piece.h {
+            let orientations: &[bool] = if allow_rotate && piece.length != piece.width {
                 &[false, true]
             } else {
                 &[false]
