@@ -1,7 +1,7 @@
 use clap::Parser;
 use cut_optimizer::render;
 use cut_optimizer::solver::Solver;
-use cut_optimizer::types::{Demand, Rect};
+use cut_optimizer::types::{CutDirection, Demand, Rect};
 
 #[derive(Parser)]
 #[command(
@@ -25,9 +25,25 @@ struct Cli {
     #[arg(long)]
     no_rotate: bool,
 
+    /// Cut direction: auto, along-length, or along-width
+    #[arg(long, default_value = "auto", value_parser = parse_cut_direction)]
+    cut_direction: CutDirection,
+
     /// Show ASCII layout of each sheet
     #[arg(long)]
     layout: bool,
+}
+
+fn parse_cut_direction(s: &str) -> Result<CutDirection, String> {
+    match s {
+        "auto" => Ok(CutDirection::Auto),
+        "along-length" => Ok(CutDirection::AlongLength),
+        "along-width" => Ok(CutDirection::AlongWidth),
+        _ => Err(format!(
+            "invalid cut direction '{}', expected: auto, along-length, or along-width",
+            s
+        )),
+    }
 }
 
 fn parse_dimensions(s: &str) -> Result<Rect, String> {
@@ -94,7 +110,7 @@ fn main() {
         }
     }
 
-    let solver = Solver::new(stock, cli.kerf, demands);
+    let solver = Solver::new(stock, cli.kerf, cli.cut_direction, demands);
     let solution = solver.solve();
 
     // Output results

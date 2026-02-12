@@ -1,17 +1,19 @@
 use crate::guillotine::{GuillotineBin, ScoreStrategy};
-use crate::types::{Demand, Rect, SheetResult, Solution};
+use crate::types::{CutDirection, Demand, Rect, SheetResult, Solution};
 
 pub struct Solver {
     stock: Rect,
     kerf: u32,
+    cut_direction: CutDirection,
     demands: Vec<Demand>,
 }
 
 impl Solver {
-    pub fn new(stock: Rect, kerf: u32, demands: Vec<Demand>) -> Self {
+    pub fn new(stock: Rect, kerf: u32, cut_direction: CutDirection, demands: Vec<Demand>) -> Self {
         Self {
             stock,
             kerf,
+            cut_direction,
             demands,
         }
     }
@@ -57,17 +59,30 @@ impl Solver {
             ScoreStrategy::BestLongSideFit,
         ];
 
+        // In Auto mode, try both directions and keep the best result
+        let directions = match self.cut_direction {
+            CutDirection::Auto => vec![CutDirection::AlongLength, CutDirection::AlongWidth],
+            dir => vec![dir],
+        };
+
         let mut best: Option<Solution> = None;
-        for &strategy in &strategies {
-            let sol = self.greedy_solve(pieces, strategy);
-            if best.is_none() || sol.sheets.len() < best.as_ref().unwrap().sheets.len() {
-                best = Some(sol);
+        for &dir in &directions {
+            for &strategy in &strategies {
+                let sol = self.greedy_solve(pieces, strategy, dir);
+                if best.is_none() || sol.sheets.len() < best.as_ref().unwrap().sheets.len() {
+                    best = Some(sol);
+                }
             }
         }
         best.unwrap()
     }
 
-    fn greedy_solve(&self, pieces: &[(Rect, bool)], strategy: ScoreStrategy) -> Solution {
+    fn greedy_solve(
+        &self,
+        pieces: &[(Rect, bool)],
+        strategy: ScoreStrategy,
+        direction: CutDirection,
+    ) -> Solution {
         let mut bins: Vec<GuillotineBin> = Vec::new();
 
         for &(piece, allow_rotate) in pieces {
@@ -89,7 +104,7 @@ impl Solver {
                 bins[bi].place(scored, piece);
             } else {
                 // Open new bin
-                let mut bin = GuillotineBin::new(self.stock, self.kerf);
+                let mut bin = GuillotineBin::new(self.stock, self.kerf, direction);
                 let scored = bin
                     .find_best(piece, allow_rotate, strategy)
                     .expect("piece larger than stock");
@@ -99,6 +114,13 @@ impl Solver {
         }
 
         self.bins_to_solution(bins)
+    }
+
+    fn bb_directions(&self) -> Vec<CutDirection> {
+        match self.cut_direction {
+            CutDirection::Auto => vec![CutDirection::AlongLength, CutDirection::AlongWidth],
+            dir => vec![dir],
+        }
     }
 
     fn branch_and_bound(&self, pieces: &[(Rect, bool)], upper_bound: usize) -> Solution {
@@ -198,13 +220,15 @@ impl Solver {
 
         // Try opening a new bin (only if it wouldn't exceed best)
         if bins.len() + 1 < *best_count {
-            let mut new_bins = bins;
-            let mut new_bin = GuillotineBin::new(self.stock, self.kerf);
-            let scored = new_bin.find_best(piece, allow_rotate, ScoreStrategy::BestAreaFit);
-            if let Some(scored) = scored {
-                new_bin.place(scored, piece);
-                new_bins.push(new_bin);
-                self.bb_recurse(pieces, idx + 1, new_bins, best_bins, best_count);
+            for &dir in &self.bb_directions() {
+                let mut new_bins = bins.clone();
+                let mut new_bin = GuillotineBin::new(self.stock, self.kerf, dir);
+                let scored = new_bin.find_best(piece, allow_rotate, ScoreStrategy::BestAreaFit);
+                if let Some(scored) = scored {
+                    new_bin.place(scored, piece);
+                    new_bins.push(new_bin);
+                    self.bb_recurse(pieces, idx + 1, new_bins, best_bins, best_count);
+                }
             }
         }
     }
@@ -253,12 +277,18 @@ mod tests {
                 assert!(
                     p.x + p.rect.length <= stock.length,
                     "sheet {si}, piece {pi} ({}) exceeds stock length: x={} + length={} > {}",
-                    p.rect, p.x, p.rect.length, stock.length
+                    p.rect,
+                    p.x,
+                    p.rect.length,
+                    stock.length
                 );
                 assert!(
                     p.y + p.rect.width <= stock.width,
                     "sheet {si}, piece {pi} ({}) exceeds stock width: y={} + width={} > {}",
-                    p.rect, p.y, p.rect.width, stock.width
+                    p.rect,
+                    p.y,
+                    p.rect.width,
+                    stock.width
                 );
             }
 
@@ -278,8 +308,7 @@ mod tests {
                 let b_x_end = b.x + b.rect.length;
                 let b_y_end = b.y + b.rect.width;
 
-                let overlaps = a.x < b_x_end && b.x < a_x_end
-                    && a.y < b_y_end && b.y < a_y_end;
+                let overlaps = a.x < b_x_end && b.x < a_x_end && a.y < b_y_end && b.y < a_y_end;
 
                 assert!(
                     !overlaps,
@@ -295,6 +324,7 @@ mod tests {
         let solver = Solver::new(
             Rect::new(100, 100),
             0,
+            CutDirection::Auto,
             vec![Demand {
                 rect: Rect::new(50, 50),
                 qty: 1,
@@ -311,6 +341,7 @@ mod tests {
         let solver = Solver::new(
             Rect::new(100, 100),
             0,
+            CutDirection::Auto,
             vec![Demand {
                 rect: Rect::new(50, 50),
                 qty: 4,
@@ -327,6 +358,7 @@ mod tests {
         let solver = Solver::new(
             Rect::new(100, 100),
             0,
+            CutDirection::Auto,
             vec![Demand {
                 rect: Rect::new(60, 60),
                 qty: 4,
@@ -345,6 +377,7 @@ mod tests {
         let solver = Solver::new(
             Rect::new(100, 50),
             0,
+            CutDirection::Auto,
             vec![Demand {
                 rect: Rect::new(50, 100),
                 qty: 1,
@@ -359,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_no_demands() {
-        let solver = Solver::new(Rect::new(100, 100), 0, vec![]);
+        let solver = Solver::new(Rect::new(100, 100), 0, CutDirection::Auto, vec![]);
         let sol = solver.solve();
         assert_solution_valid(&sol, 0);
     }
@@ -370,6 +403,7 @@ mod tests {
         let solver_no_kerf = Solver::new(
             Rect::new(100, 100),
             0,
+            CutDirection::Auto,
             vec![Demand {
                 rect: Rect::new(50, 100),
                 qty: 2,
@@ -384,6 +418,7 @@ mod tests {
         let solver_kerf = Solver::new(
             Rect::new(100, 100),
             5,
+            CutDirection::Auto,
             vec![Demand {
                 rect: Rect::new(50, 100),
                 qty: 2,
@@ -400,6 +435,7 @@ mod tests {
         let solver = Solver::new(
             Rect::new(100, 100),
             0,
+            CutDirection::Auto,
             vec![Demand {
                 rect: Rect::new(100, 100),
                 qty: 1,
@@ -417,22 +453,48 @@ mod tests {
     fn test_complex_mixed_sizes_no_kerf() {
         let stock = Rect::new(2440, 1220);
         let demands = vec![
-            Demand { rect: Rect::new(800, 600), qty: 5, allow_rotate: true },
-            Demand { rect: Rect::new(400, 300), qty: 8, allow_rotate: true },
-            Demand { rect: Rect::new(600, 400), qty: 4, allow_rotate: true },
-            Demand { rect: Rect::new(1200, 600), qty: 3, allow_rotate: true },
-            Demand { rect: Rect::new(300, 200), qty: 6, allow_rotate: true },
-            Demand { rect: Rect::new(500, 500), qty: 4, allow_rotate: false },
+            Demand {
+                rect: Rect::new(800, 600),
+                qty: 5,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(400, 300),
+                qty: 8,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(600, 400),
+                qty: 4,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(1200, 600),
+                qty: 3,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(300, 200),
+                qty: 6,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(500, 500),
+                qty: 4,
+                allow_rotate: false,
+            },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 30);
 
-        let solver = Solver::new(stock, 0, demands);
+        let solver = Solver::new(stock, 0, CutDirection::Auto, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 30);
 
         // Lower bound: total piece area / stock area
-        let total_area: u64 = sol.sheets.iter()
+        let total_area: u64 = sol
+            .sheets
+            .iter()
             .flat_map(|s| &s.placements)
             .map(|p| p.rect.area())
             .sum();
@@ -446,18 +508,46 @@ mod tests {
     fn test_complex_mixed_sizes_with_kerf() {
         let stock = Rect::new(2440, 1220);
         let demands = vec![
-            Demand { rect: Rect::new(700, 500), qty: 6, allow_rotate: true },
-            Demand { rect: Rect::new(350, 250), qty: 5, allow_rotate: true },
-            Demand { rect: Rect::new(1000, 400), qty: 3, allow_rotate: true },
-            Demand { rect: Rect::new(450, 450), qty: 4, allow_rotate: false },
-            Demand { rect: Rect::new(600, 300), qty: 7, allow_rotate: true },
-            Demand { rect: Rect::new(250, 150), qty: 5, allow_rotate: true },
-            Demand { rect: Rect::new(800, 400), qty: 5, allow_rotate: true },
+            Demand {
+                rect: Rect::new(700, 500),
+                qty: 6,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(350, 250),
+                qty: 5,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(1000, 400),
+                qty: 3,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(450, 450),
+                qty: 4,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(600, 300),
+                qty: 7,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(250, 150),
+                qty: 5,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(800, 400),
+                qty: 5,
+                allow_rotate: true,
+            },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 35);
 
-        let solver = Solver::new(stock, 3, demands);
+        let solver = Solver::new(stock, 3, CutDirection::Auto, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 35);
     }
@@ -468,27 +558,63 @@ mod tests {
     fn test_complex_no_rotation() {
         let stock = Rect::new(2440, 1220);
         let demands = vec![
-            Demand { rect: Rect::new(1200, 600), qty: 4, allow_rotate: false },
-            Demand { rect: Rect::new(800, 400), qty: 6, allow_rotate: false },
-            Demand { rect: Rect::new(600, 300), qty: 5, allow_rotate: false },
-            Demand { rect: Rect::new(400, 400), qty: 3, allow_rotate: false },
-            Demand { rect: Rect::new(500, 250), qty: 7, allow_rotate: false },
-            Demand { rect: Rect::new(300, 200), qty: 5, allow_rotate: false },
-            Demand { rect: Rect::new(700, 350), qty: 6, allow_rotate: false },
-            Demand { rect: Rect::new(250, 150), qty: 4, allow_rotate: false },
+            Demand {
+                rect: Rect::new(1200, 600),
+                qty: 4,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(800, 400),
+                qty: 6,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(600, 300),
+                qty: 5,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(400, 400),
+                qty: 3,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(500, 250),
+                qty: 7,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(300, 200),
+                qty: 5,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(700, 350),
+                qty: 6,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(250, 150),
+                qty: 4,
+                allow_rotate: false,
+            },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 40);
 
-        let solver = Solver::new(stock, 0, demands.clone());
+        let solver = Solver::new(stock, 0, CutDirection::Auto, demands.clone());
         let sol_no_rot = solver.solve();
         assert_solution_valid(&sol_no_rot, 40);
 
         // Compare with rotation enabled — should use <= sheets
-        let demands_rot: Vec<Demand> = demands.into_iter()
-            .map(|d| Demand { allow_rotate: true, ..d })
+        let demands_rot: Vec<Demand> = demands
+            .into_iter()
+            .map(|d| Demand {
+                allow_rotate: true,
+                ..d
+            })
             .collect();
-        let solver_rot = Solver::new(stock, 0, demands_rot);
+        let solver_rot = Solver::new(stock, 0, CutDirection::Auto, demands_rot);
         let sol_rot = solver_rot.solve();
         assert_solution_valid(&sol_rot, 40);
         assert!(sol_rot.sheet_count() <= sol_no_rot.sheet_count());
@@ -499,21 +625,61 @@ mod tests {
     fn test_complex_large_batch_mixed_rotation() {
         let stock = Rect::new(3000, 1500);
         let demands = vec![
-            Demand { rect: Rect::new(900, 600), qty: 5, allow_rotate: true },
-            Demand { rect: Rect::new(500, 400), qty: 6, allow_rotate: false },
-            Demand { rect: Rect::new(700, 350), qty: 4, allow_rotate: true },
-            Demand { rect: Rect::new(1200, 500), qty: 3, allow_rotate: true },
-            Demand { rect: Rect::new(300, 300), qty: 8, allow_rotate: false },
-            Demand { rect: Rect::new(450, 200), qty: 6, allow_rotate: true },
-            Demand { rect: Rect::new(600, 450), qty: 5, allow_rotate: false },
-            Demand { rect: Rect::new(800, 300), qty: 4, allow_rotate: true },
-            Demand { rect: Rect::new(350, 250), qty: 5, allow_rotate: true },
-            Demand { rect: Rect::new(1000, 700), qty: 4, allow_rotate: false },
+            Demand {
+                rect: Rect::new(900, 600),
+                qty: 5,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(500, 400),
+                qty: 6,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(700, 350),
+                qty: 4,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(1200, 500),
+                qty: 3,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(300, 300),
+                qty: 8,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(450, 200),
+                qty: 6,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(600, 450),
+                qty: 5,
+                allow_rotate: false,
+            },
+            Demand {
+                rect: Rect::new(800, 300),
+                qty: 4,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(350, 250),
+                qty: 5,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(1000, 700),
+                qty: 4,
+                allow_rotate: false,
+            },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 50);
 
-        let solver = Solver::new(stock, 4, demands);
+        let solver = Solver::new(stock, 4, CutDirection::Auto, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 50);
 
@@ -526,20 +692,134 @@ mod tests {
     fn test_complex_small_stock_many_sheets() {
         let stock = Rect::new(500, 400);
         let demands = vec![
-            Demand { rect: Rect::new(200, 150), qty: 8, allow_rotate: true },
-            Demand { rect: Rect::new(300, 200), qty: 6, allow_rotate: true },
-            Demand { rect: Rect::new(150, 100), qty: 7, allow_rotate: true },
-            Demand { rect: Rect::new(250, 180), qty: 5, allow_rotate: true },
-            Demand { rect: Rect::new(400, 300), qty: 6, allow_rotate: true },
+            Demand {
+                rect: Rect::new(200, 150),
+                qty: 8,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(300, 200),
+                qty: 6,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(150, 100),
+                qty: 7,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(250, 180),
+                qty: 5,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(400, 300),
+                qty: 6,
+                allow_rotate: true,
+            },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 32);
 
-        let solver = Solver::new(stock, 0, demands);
+        let solver = Solver::new(stock, 0, CutDirection::Auto, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 32);
 
         // With small stock and large pieces, we need many sheets
         assert!(sol.sheet_count() >= 5);
+    }
+
+    /// Real-world test from CSV: 473x14:4, 473x196:4, 473x158:12, 100x100:8, 742x473:8
+    /// on 2500x1200 stock with kerf=3.
+    /// Verifies all 3 cut directions produce valid solutions and that
+    /// AlongLength and AlongWidth produce different placements.
+    #[test]
+    fn test_cut_direction_csv_data() {
+        let stock = Rect::new(2500, 1200);
+        let demands = vec![
+            Demand {
+                rect: Rect::new(473, 14),
+                qty: 4,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(473, 196),
+                qty: 4,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(473, 158),
+                qty: 12,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(100, 100),
+                qty: 8,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(742, 473),
+                qty: 8,
+                allow_rotate: true,
+            },
+        ];
+        let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
+        assert_eq!(total_pieces, 36);
+
+        let sol_auto = Solver::new(stock, 3, CutDirection::Auto, demands.clone()).solve();
+        let sol_length = Solver::new(stock, 3, CutDirection::AlongLength, demands.clone()).solve();
+        let sol_width = Solver::new(stock, 3, CutDirection::AlongWidth, demands.clone()).solve();
+
+        // All solutions must be valid
+        assert_solution_valid(&sol_auto, 36);
+        assert_solution_valid(&sol_length, 36);
+        assert_solution_valid(&sol_width, 36);
+
+        // Collect all placements (x, y) per direction to verify they differ
+        let coords = |sol: &Solution| -> Vec<Vec<(u32, u32)>> {
+            sol.sheets
+                .iter()
+                .map(|s| {
+                    let mut c: Vec<(u32, u32)> = s.placements.iter().map(|p| (p.x, p.y)).collect();
+                    c.sort();
+                    c
+                })
+                .collect()
+        };
+        let coords_length = coords(&sol_length);
+        let coords_width = coords(&sol_width);
+
+        assert_ne!(
+            coords_length, coords_width,
+            "AlongLength and AlongWidth should produce different placement layouts"
+        );
+    }
+
+    /// Verifies that each CutDirection produces valid, non-overlapping solutions
+    /// for a simple case where the split direction clearly matters.
+    #[test]
+    fn test_cut_direction_all_modes_valid() {
+        let stock = Rect::new(1000, 500);
+        let demands = vec![
+            Demand {
+                rect: Rect::new(400, 200),
+                qty: 4,
+                allow_rotate: true,
+            },
+            Demand {
+                rect: Rect::new(300, 150),
+                qty: 3,
+                allow_rotate: true,
+            },
+        ];
+
+        for &dir in &[
+            CutDirection::Auto,
+            CutDirection::AlongLength,
+            CutDirection::AlongWidth,
+        ] {
+            let sol = Solver::new(stock, 3, dir, demands.clone()).solve();
+            assert_solution_valid(&sol, 7);
+        }
     }
 }

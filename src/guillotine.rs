@@ -1,4 +1,4 @@
-use crate::types::{Placement, Rect};
+use crate::types::{CutDirection, Placement, Rect};
 
 #[derive(Debug, Clone, Copy)]
 pub struct FreeRect {
@@ -12,6 +12,7 @@ pub struct GuillotineBin {
     #[allow(dead_code)]
     stock: Rect,
     kerf: u32,
+    cut_direction: CutDirection,
     pub free_rects: Vec<FreeRect>,
     pub placements: Vec<Placement>,
 }
@@ -32,10 +33,11 @@ pub struct ScoredPlacement {
 }
 
 impl GuillotineBin {
-    pub fn new(stock: Rect, kerf: u32) -> Self {
+    pub fn new(stock: Rect, kerf: u32, cut_direction: CutDirection) -> Self {
         Self {
             stock,
             kerf,
+            cut_direction,
             free_rects: vec![FreeRect {
                 x: 0,
                 y: 0,
@@ -92,17 +94,22 @@ impl GuillotineBin {
         match strategy {
             ScoreStrategy::BestAreaFit => {
                 let area_diff = free.area() - piece.area();
-                let short_side = std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
+                let short_side =
+                    std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
                 (area_diff, short_side)
             }
             ScoreStrategy::BestShortSideFit => {
-                let short = std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
-                let long = std::cmp::max(free.length - piece.length, free.width - piece.width) as u64;
+                let short =
+                    std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
+                let long =
+                    std::cmp::max(free.length - piece.length, free.width - piece.width) as u64;
                 (short, long)
             }
             ScoreStrategy::BestLongSideFit => {
-                let long = std::cmp::max(free.length - piece.length, free.width - piece.width) as u64;
-                let short = std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
+                let long =
+                    std::cmp::max(free.length - piece.length, free.width - piece.width) as u64;
+                let short =
+                    std::cmp::min(free.length - piece.length, free.width - piece.width) as u64;
                 (long, short)
             }
         }
@@ -138,8 +145,15 @@ impl GuillotineBin {
 
         // Use shorter leftover axis split
         if right_l > 0 && bottom_w > 0 {
-            // Decide split direction: shorter leftover axis
-            if free.rect.length - placed.length < free.rect.width - placed.width {
+            // Decide split direction based on cut_direction preference
+            let split_horizontally = match self.cut_direction {
+                CutDirection::Auto => {
+                    free.rect.length - placed.length < free.rect.width - placed.width
+                }
+                CutDirection::AlongLength => true,
+                CutDirection::AlongWidth => false,
+            };
+            if split_horizontally {
                 // Split horizontally: right rect is narrow, bottom rect spans full length
                 // Right remainder
                 self.free_rects.push(FreeRect {
@@ -245,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_place_single_piece() {
-        let mut bin = GuillotineBin::new(Rect::new(100, 100), 0);
+        let mut bin = GuillotineBin::new(Rect::new(100, 100), 0, CutDirection::Auto);
         let piece = Rect::new(50, 30);
         let scored = bin
             .find_best(piece, false, ScoreStrategy::BestAreaFit)
@@ -260,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_piece_too_large() {
-        let bin = GuillotineBin::new(Rect::new(100, 100), 0);
+        let bin = GuillotineBin::new(Rect::new(100, 100), 0, CutDirection::Auto);
         let piece = Rect::new(200, 50);
         assert!(
             bin.find_best(piece, false, ScoreStrategy::BestAreaFit)
@@ -270,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_rotation_fit() {
-        let bin = GuillotineBin::new(Rect::new(100, 50), 0);
+        let bin = GuillotineBin::new(Rect::new(100, 50), 0, CutDirection::Auto);
         let piece = Rect::new(50, 100);
         // Doesn't fit without rotation
         assert!(
@@ -286,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_kerf() {
-        let mut bin = GuillotineBin::new(Rect::new(100, 100), 5);
+        let mut bin = GuillotineBin::new(Rect::new(100, 100), 5, CutDirection::Auto);
         let piece = Rect::new(50, 100);
         let scored = bin
             .find_best(piece, false, ScoreStrategy::BestAreaFit)
@@ -299,12 +313,110 @@ mod tests {
 
     #[test]
     fn test_fill_exact() {
-        let mut bin = GuillotineBin::new(Rect::new(100, 100), 0);
+        let mut bin = GuillotineBin::new(Rect::new(100, 100), 0, CutDirection::Auto);
         let piece = Rect::new(100, 100);
         let scored = bin
             .find_best(piece, false, ScoreStrategy::BestAreaFit)
             .unwrap();
         bin.place(scored, piece);
         assert!(bin.free_rects.is_empty());
+    }
+
+    /// Place a 40x30 piece in a 100x100 stock. The leftover is asymmetric (60 vs 70),
+    /// so AlongLength and AlongWidth must produce different free rects.
+    ///
+    /// AlongLength (split horizontally): bottom rect spans full length (100),
+    ///   right rect is narrow (30 tall).
+    /// AlongWidth (split vertically): right rect spans full width (100),
+    ///   bottom rect is narrow (40 wide).
+    #[test]
+    fn test_cut_direction_along_length_split() {
+        let stock = Rect::new(100, 100);
+        let piece = Rect::new(40, 30);
+
+        let mut bin = GuillotineBin::new(stock, 0, CutDirection::AlongLength);
+        let scored = bin
+            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .unwrap();
+        bin.place(scored, piece);
+
+        // AlongLength => split horizontally: bottom rect gets full length
+        assert!(
+            bin.free_rects
+                .iter()
+                .any(|f| f.rect.length == 60 && f.rect.width == 30),
+            "AlongLength should produce a 60x30 right rect, got: {:?}",
+            bin.free_rects
+        );
+        assert!(
+            bin.free_rects
+                .iter()
+                .any(|f| f.rect.length == 100 && f.rect.width == 70),
+            "AlongLength should produce a 100x70 bottom rect spanning full length, got: {:?}",
+            bin.free_rects
+        );
+    }
+
+    #[test]
+    fn test_cut_direction_along_width_split() {
+        let stock = Rect::new(100, 100);
+        let piece = Rect::new(40, 30);
+
+        let mut bin = GuillotineBin::new(stock, 0, CutDirection::AlongWidth);
+        let scored = bin
+            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .unwrap();
+        bin.place(scored, piece);
+
+        // AlongWidth => split vertically: right rect gets full width
+        assert!(
+            bin.free_rects
+                .iter()
+                .any(|f| f.rect.length == 60 && f.rect.width == 100),
+            "AlongWidth should produce a 60x100 right rect spanning full width, got: {:?}",
+            bin.free_rects
+        );
+        assert!(
+            bin.free_rects
+                .iter()
+                .any(|f| f.rect.length == 40 && f.rect.width == 70),
+            "AlongWidth should produce a 40x70 bottom rect, got: {:?}",
+            bin.free_rects
+        );
+    }
+
+    #[test]
+    fn test_cut_direction_produces_different_splits() {
+        let stock = Rect::new(100, 100);
+        let piece = Rect::new(40, 30);
+
+        let mut bin_length = GuillotineBin::new(stock, 0, CutDirection::AlongLength);
+        let scored = bin_length
+            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .unwrap();
+        bin_length.place(scored, piece);
+
+        let mut bin_width = GuillotineBin::new(stock, 0, CutDirection::AlongWidth);
+        let scored = bin_width
+            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .unwrap();
+        bin_width.place(scored, piece);
+
+        // The free rects must differ between the two directions
+        let rects_length: Vec<(u32, u32)> = bin_length
+            .free_rects
+            .iter()
+            .map(|f| (f.rect.length, f.rect.width))
+            .collect();
+        let rects_width: Vec<(u32, u32)> = bin_width
+            .free_rects
+            .iter()
+            .map(|f| (f.rect.length, f.rect.width))
+            .collect();
+
+        assert_ne!(
+            rects_length, rects_width,
+            "AlongLength and AlongWidth must produce different free rect splits"
+        );
     }
 }

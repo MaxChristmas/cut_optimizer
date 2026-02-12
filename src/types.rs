@@ -1,6 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub fn deserialize_u32_from_number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+pub fn deserialize_u32_from_number<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
     let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
     match value {
         serde_json::Value::Number(n) => {
@@ -49,6 +51,15 @@ impl Rect {
     pub fn fits_in(&self, other: &Rect) -> bool {
         self.length <= other.length && self.width <= other.width
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CutDirection {
+    #[default]
+    Auto,
+    AlongLength,
+    AlongWidth,
 }
 
 impl std::fmt::Display for Rect {

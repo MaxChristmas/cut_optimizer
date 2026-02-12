@@ -1,6 +1,10 @@
-use axum::{Json, Router, http::StatusCode, routing::{get, post}};
+use axum::{
+    Json, Router,
+    http::StatusCode,
+    routing::{get, post},
+};
 use cut_optimizer::solver::Solver;
-use cut_optimizer::types::{Demand, Rect, Solution, deserialize_u32_from_number};
+use cut_optimizer::types::{CutDirection, Demand, Rect, Solution, deserialize_u32_from_number};
 use serde::{Deserialize, Serialize};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -11,6 +15,10 @@ struct OptimizeRequest {
     cuts: Vec<CutRequest>,
     #[serde(default, deserialize_with = "deserialize_u32_from_number")]
     kerf: u32,
+    #[serde(default)]
+    cut_direction: CutDirection,
+    #[serde(default = "default_true")]
+    allow_rotate: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -18,8 +26,6 @@ struct CutRequest {
     rect: Rect,
     #[serde(deserialize_with = "deserialize_u32_from_number")]
     qty: u32,
-    #[serde(default = "default_true")]
-    allow_rotate: bool,
 }
 
 fn default_true() -> bool {
@@ -43,7 +49,10 @@ struct SheetResponse {
 async fn optimize(
     Json(req): Json<OptimizeRequest>,
 ) -> Result<Json<OptimizeResponse>, (StatusCode, String)> {
-    tracing::info!(body = serde_json::to_string(&req).unwrap_or_default(), "POST /optimize");
+    tracing::info!(
+        body = serde_json::to_string(&req).unwrap_or_default(),
+        "POST /optimize"
+    );
 
     if req.stock.length == 0 || req.stock.width == 0 {
         return Err((
@@ -63,7 +72,7 @@ async fn optimize(
                 return Err("cut quantity must be non-zero".to_string());
             }
             let fits_normal = c.rect.fits_in(&req.stock);
-            let fits_rotated = c.allow_rotate && c.rect.rotated().fits_in(&req.stock);
+            let fits_rotated = req.allow_rotate && c.rect.rotated().fits_in(&req.stock);
             if !fits_normal && !fits_rotated {
                 return Err(format!(
                     "piece {}x{} does not fit in stock {}x{}",
@@ -73,13 +82,13 @@ async fn optimize(
             Ok(Demand {
                 rect: c.rect,
                 qty: c.qty,
-                allow_rotate: c.allow_rotate,
+                allow_rotate: req.allow_rotate,
             })
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
-    let solver = Solver::new(req.stock, req.kerf, demands);
+    let solver = Solver::new(req.stock, req.kerf, req.cut_direction, demands);
     let solution: Solution = solver.solve();
 
     let response = OptimizeResponse {

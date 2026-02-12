@@ -4,7 +4,10 @@ const MAX_WIDTH: f64 = 80.0;
 const MAX_HEIGHT: f64 = 40.0;
 
 pub fn render_sheet(stock: Rect, placements: &[Placement]) -> String {
-    let scale = f64::min(MAX_WIDTH / stock.length as f64, MAX_HEIGHT / stock.width as f64);
+    let scale = f64::min(
+        MAX_WIDTH / stock.length as f64,
+        MAX_HEIGHT / stock.width as f64,
+    );
     let grid_w = (stock.length as f64 * scale).round() as usize;
     let grid_h = (stock.width as f64 * scale).round() as usize;
 
@@ -67,10 +70,18 @@ fn draw_rect(grid: &mut [Vec<char>], x: usize, y: usize, w: usize, h: usize) {
     for i in x..=x + w {
         if i < cols {
             if y < rows {
-                grid[y][i] = if grid[y][i] == '|' || grid[y][i] == '+' { '+' } else { '-' };
+                grid[y][i] = if grid[y][i] == '|' || grid[y][i] == '+' {
+                    '+'
+                } else {
+                    '-'
+                };
             }
             if y + h < rows {
-                grid[y + h][i] = if grid[y + h][i] == '|' || grid[y + h][i] == '+' { '+' } else { '-' };
+                grid[y + h][i] = if grid[y + h][i] == '|' || grid[y + h][i] == '+' {
+                    '+'
+                } else {
+                    '-'
+                };
             }
         }
     }
@@ -79,10 +90,18 @@ fn draw_rect(grid: &mut [Vec<char>], x: usize, y: usize, w: usize, h: usize) {
     for j in y..=y + h {
         if j < rows {
             if x < cols {
-                grid[j][x] = if grid[j][x] == '-' || grid[j][x] == '+' { '+' } else { '|' };
+                grid[j][x] = if grid[j][x] == '-' || grid[j][x] == '+' {
+                    '+'
+                } else {
+                    '|'
+                };
             }
             if x + w < cols {
-                grid[j][x + w] = if grid[j][x + w] == '-' || grid[j][x + w] == '+' { '+' } else { '|' };
+                grid[j][x + w] = if grid[j][x + w] == '-' || grid[j][x + w] == '+' {
+                    '+'
+                } else {
+                    '|'
+                };
             }
         }
     }
