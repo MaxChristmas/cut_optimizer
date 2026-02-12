@@ -2,8 +2,10 @@ use axum::{Json, Router, http::StatusCode, routing::{get, post}};
 use cut_optimizer::solver::Solver;
 use cut_optimizer::types::{Demand, Rect, Solution, deserialize_u32_from_number};
 use serde::{Deserialize, Serialize};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct OptimizeRequest {
     stock: Rect,
     cuts: Vec<CutRequest>,
@@ -11,7 +13,7 @@ struct OptimizeRequest {
     kerf: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct CutRequest {
     rect: Rect,
     #[serde(deserialize_with = "deserialize_u32_from_number")]
@@ -41,6 +43,8 @@ struct SheetResponse {
 async fn optimize(
     Json(req): Json<OptimizeRequest>,
 ) -> Result<Json<OptimizeResponse>, (StatusCode, String)> {
+    tracing::info!(body = serde_json::to_string(&req).unwrap_or_default(), "POST /optimize");
+
     if req.stock.length == 0 || req.stock.width == 0 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -97,12 +101,30 @@ async fn optimize(
 
 #[tokio::main]
 async fn main() {
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("development.log")
+        .expect("failed to open development.log");
+
+    tracing_subscriber::fmt()
+        .with_writer(log_file)
+        .with_target(false)
+        .with_ansi(false)
+        .with_max_level(Level::INFO)
+        .init();
+
     let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
     let addr = format!("0.0.0.0:{port}");
 
     let app = Router::new()
         .route("/up", get(|| async { "ok" }))
-        .route("/optimize", post(optimize));
+        .route("/optimize", post(optimize))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        );
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     eprintln!("Listening on {addr}");
