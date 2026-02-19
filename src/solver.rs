@@ -1,19 +1,29 @@
 use crate::guillotine::{GuillotineBin, ScoreStrategy};
-use crate::types::{CutDirection, Demand, Rect, SheetResult, Solution};
+use crate::types::{
+    CutDirection, Demand, Rect, RotationConstraint, SheetResult, Solution, StockGrain,
+};
 
 pub struct Solver {
     stock: Rect,
     kerf: u32,
     cut_direction: CutDirection,
+    stock_grain: StockGrain,
     demands: Vec<Demand>,
 }
 
 impl Solver {
-    pub fn new(stock: Rect, kerf: u32, cut_direction: CutDirection, demands: Vec<Demand>) -> Self {
+    pub fn new(
+        stock: Rect,
+        kerf: u32,
+        cut_direction: CutDirection,
+        stock_grain: StockGrain,
+        demands: Vec<Demand>,
+    ) -> Self {
         Self {
             stock,
             kerf,
             cut_direction,
+            stock_grain,
             demands,
         }
     }
@@ -40,11 +50,13 @@ impl Solver {
         }
     }
 
-    fn expand_demands(&self) -> Vec<(Rect, bool)> {
+    fn expand_demands(&self) -> Vec<(Rect, RotationConstraint)> {
         let mut pieces = Vec::new();
         for d in &self.demands {
+            let rotation =
+                RotationConstraint::from_grain(self.stock_grain, d.grain, d.allow_rotate);
             for _ in 0..d.qty {
-                pieces.push((d.rect, d.allow_rotate));
+                pieces.push((d.rect, rotation));
             }
         }
         // Sort by area descending for better packing
@@ -52,7 +64,7 @@ impl Solver {
         pieces
     }
 
-    fn greedy_best(&self, pieces: &[(Rect, bool)]) -> Solution {
+    fn greedy_best(&self, pieces: &[(Rect, RotationConstraint)]) -> Solution {
         let strategies = [
             ScoreStrategy::BestAreaFit,
             ScoreStrategy::BestShortSideFit,
@@ -79,19 +91,19 @@ impl Solver {
 
     fn greedy_solve(
         &self,
-        pieces: &[(Rect, bool)],
+        pieces: &[(Rect, RotationConstraint)],
         strategy: ScoreStrategy,
         direction: CutDirection,
     ) -> Solution {
         let mut bins: Vec<GuillotineBin> = Vec::new();
 
-        for &(piece, allow_rotate) in pieces {
+        for &(piece, rotation) in pieces {
             // Try to fit in existing bins
             let mut best_bin = None;
             let mut best_score = None;
 
             for (bi, bin) in bins.iter().enumerate() {
-                if let Some(scored) = bin.find_best(piece, allow_rotate, strategy)
+                if let Some(scored) = bin.find_best(piece, rotation, strategy)
                     && (best_score.is_none() || scored.score < best_score.unwrap())
                 {
                     best_bin = Some(bi);
@@ -100,13 +112,13 @@ impl Solver {
             }
 
             if let Some(bi) = best_bin {
-                let scored = bins[bi].find_best(piece, allow_rotate, strategy).unwrap();
+                let scored = bins[bi].find_best(piece, rotation, strategy).unwrap();
                 bins[bi].place(scored, piece);
             } else {
                 // Open new bin
                 let mut bin = GuillotineBin::new(self.stock, self.kerf, direction);
                 let scored = bin
-                    .find_best(piece, allow_rotate, strategy)
+                    .find_best(piece, rotation, strategy)
                     .expect("piece larger than stock");
                 bin.place(scored, piece);
                 bins.push(bin);
@@ -123,7 +135,11 @@ impl Solver {
         }
     }
 
-    fn branch_and_bound(&self, pieces: &[(Rect, bool)], upper_bound: usize) -> Solution {
+    fn branch_and_bound(
+        &self,
+        pieces: &[(Rect, RotationConstraint)],
+        upper_bound: usize,
+    ) -> Solution {
         // Skip B&B for large inputs (too slow)
         if pieces.len() > 20 {
             return Solution {
@@ -149,7 +165,7 @@ impl Solver {
 
     fn bb_recurse(
         &self,
-        pieces: &[(Rect, bool)],
+        pieces: &[(Rect, RotationConstraint)],
         idx: usize,
         bins: Vec<GuillotineBin>,
         best_bins: &mut Option<Vec<GuillotineBin>>,
@@ -168,7 +184,7 @@ impl Solver {
             return;
         }
 
-        let (piece, allow_rotate) = pieces[idx];
+        let (piece, rotation) = pieces[idx];
 
         // Lower bound: remaining area / stock area
         let remaining_area: u64 = pieces[idx..].iter().map(|(r, _)| r.area()).sum();
@@ -200,17 +216,19 @@ impl Solver {
 
         // Try placing in each existing bin
         for bi in 0..bins.len() {
-            let orientations: &[bool] = if allow_rotate && piece.length != piece.width {
-                &[false, true]
-            } else {
-                &[false]
+            let orientations: &[bool] = match rotation {
+                RotationConstraint::Free if piece.length != piece.width => &[false, true],
+                RotationConstraint::ForceRotate => &[true],
+                _ => &[false],
             };
 
             for &rotated in orientations {
                 let try_piece = if rotated { piece.rotated() } else { piece };
                 let strategy = ScoreStrategy::BestAreaFit;
 
-                if let Some(scored) = bins[bi].find_best(try_piece, false, strategy) {
+                if let Some(scored) =
+                    bins[bi].find_best(try_piece, RotationConstraint::NoRotate, strategy)
+                {
                     let mut new_bins = bins.clone();
                     new_bins[bi].place(scored, try_piece);
                     self.bb_recurse(pieces, idx + 1, new_bins, best_bins, best_count);
@@ -223,7 +241,7 @@ impl Solver {
             for &dir in &self.bb_directions() {
                 let mut new_bins = bins.clone();
                 let mut new_bin = GuillotineBin::new(self.stock, self.kerf, dir);
-                let scored = new_bin.find_best(piece, allow_rotate, ScoreStrategy::BestAreaFit);
+                let scored = new_bin.find_best(piece, rotation, ScoreStrategy::BestAreaFit);
                 if let Some(scored) = scored {
                     new_bin.place(scored, piece);
                     new_bins.push(new_bin);
@@ -256,7 +274,7 @@ impl Solver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Demand, Placement};
+    use crate::types::{Demand, PieceGrain, Placement, StockGrain};
 
     /// Validates a complete solution:
     /// 1. Every placement fits within the stock dimensions
@@ -325,10 +343,12 @@ mod tests {
             Rect::new(100, 100),
             0,
             CutDirection::Auto,
+            StockGrain::None,
             vec![Demand {
                 rect: Rect::new(50, 50),
                 qty: 1,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             }],
         );
         let sol = solver.solve();
@@ -342,10 +362,12 @@ mod tests {
             Rect::new(100, 100),
             0,
             CutDirection::Auto,
+            StockGrain::None,
             vec![Demand {
                 rect: Rect::new(50, 50),
                 qty: 4,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             }],
         );
         let sol = solver.solve();
@@ -359,10 +381,12 @@ mod tests {
             Rect::new(100, 100),
             0,
             CutDirection::Auto,
+            StockGrain::None,
             vec![Demand {
                 rect: Rect::new(60, 60),
                 qty: 4,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             }],
         );
         let sol = solver.solve();
@@ -378,10 +402,12 @@ mod tests {
             Rect::new(100, 50),
             0,
             CutDirection::Auto,
+            StockGrain::None,
             vec![Demand {
                 rect: Rect::new(50, 100),
                 qty: 1,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             }],
         );
         let sol = solver.solve();
@@ -392,7 +418,13 @@ mod tests {
 
     #[test]
     fn test_no_demands() {
-        let solver = Solver::new(Rect::new(100, 100), 0, CutDirection::Auto, vec![]);
+        let solver = Solver::new(
+            Rect::new(100, 100),
+            0,
+            CutDirection::Auto,
+            StockGrain::None,
+            vec![],
+        );
         let sol = solver.solve();
         assert_solution_valid(&sol, 0);
     }
@@ -404,10 +436,12 @@ mod tests {
             Rect::new(100, 100),
             0,
             CutDirection::Auto,
+            StockGrain::None,
             vec![Demand {
                 rect: Rect::new(50, 100),
                 qty: 2,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             }],
         );
         let sol_no_kerf = solver_no_kerf.solve();
@@ -419,10 +453,12 @@ mod tests {
             Rect::new(100, 100),
             5,
             CutDirection::Auto,
+            StockGrain::None,
             vec![Demand {
                 rect: Rect::new(50, 100),
                 qty: 2,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             }],
         );
         let sol_kerf = solver_kerf.solve();
@@ -436,10 +472,12 @@ mod tests {
             Rect::new(100, 100),
             0,
             CutDirection::Auto,
+            StockGrain::None,
             vec![Demand {
                 rect: Rect::new(100, 100),
                 qty: 1,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             }],
         );
         let sol = solver.solve();
@@ -457,37 +495,43 @@ mod tests {
                 rect: Rect::new(800, 600),
                 qty: 5,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(400, 300),
                 qty: 8,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(600, 400),
                 qty: 4,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(1200, 600),
                 qty: 3,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(300, 200),
                 qty: 6,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(500, 500),
                 qty: 4,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 30);
 
-        let solver = Solver::new(stock, 0, CutDirection::Auto, demands);
+        let solver = Solver::new(stock, 0, CutDirection::Auto, StockGrain::None, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 30);
 
@@ -512,42 +556,49 @@ mod tests {
                 rect: Rect::new(700, 500),
                 qty: 6,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(350, 250),
                 qty: 5,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(1000, 400),
                 qty: 3,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(450, 450),
                 qty: 4,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(600, 300),
                 qty: 7,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(250, 150),
                 qty: 5,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(800, 400),
                 qty: 5,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 35);
 
-        let solver = Solver::new(stock, 3, CutDirection::Auto, demands);
+        let solver = Solver::new(stock, 3, CutDirection::Auto, StockGrain::None, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 35);
     }
@@ -562,47 +613,61 @@ mod tests {
                 rect: Rect::new(1200, 600),
                 qty: 4,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(800, 400),
                 qty: 6,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(600, 300),
                 qty: 5,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(400, 400),
                 qty: 3,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(500, 250),
                 qty: 7,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(300, 200),
                 qty: 5,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(700, 350),
                 qty: 6,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(250, 150),
                 qty: 4,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 40);
 
-        let solver = Solver::new(stock, 0, CutDirection::Auto, demands.clone());
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::None,
+            demands.clone(),
+        );
         let sol_no_rot = solver.solve();
         assert_solution_valid(&sol_no_rot, 40);
 
@@ -614,7 +679,7 @@ mod tests {
                 ..d
             })
             .collect();
-        let solver_rot = Solver::new(stock, 0, CutDirection::Auto, demands_rot);
+        let solver_rot = Solver::new(stock, 0, CutDirection::Auto, StockGrain::None, demands_rot);
         let sol_rot = solver_rot.solve();
         assert_solution_valid(&sol_rot, 40);
         assert!(sol_rot.sheet_count() <= sol_no_rot.sheet_count());
@@ -629,57 +694,67 @@ mod tests {
                 rect: Rect::new(900, 600),
                 qty: 5,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(500, 400),
                 qty: 6,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(700, 350),
                 qty: 4,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(1200, 500),
                 qty: 3,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(300, 300),
                 qty: 8,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(450, 200),
                 qty: 6,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(600, 450),
                 qty: 5,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(800, 300),
                 qty: 4,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(350, 250),
                 qty: 5,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(1000, 700),
                 qty: 4,
                 allow_rotate: false,
+                grain: PieceGrain::Auto,
             },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 50);
 
-        let solver = Solver::new(stock, 4, CutDirection::Auto, demands);
+        let solver = Solver::new(stock, 4, CutDirection::Auto, StockGrain::None, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 50);
 
@@ -696,32 +771,37 @@ mod tests {
                 rect: Rect::new(200, 150),
                 qty: 8,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(300, 200),
                 qty: 6,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(150, 100),
                 qty: 7,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(250, 180),
                 qty: 5,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(400, 300),
                 qty: 6,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 32);
 
-        let solver = Solver::new(stock, 0, CutDirection::Auto, demands);
+        let solver = Solver::new(stock, 0, CutDirection::Auto, StockGrain::None, demands);
         let sol = solver.solve();
         assert_solution_valid(&sol, 32);
 
@@ -741,34 +821,60 @@ mod tests {
                 rect: Rect::new(473, 14),
                 qty: 4,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(473, 196),
                 qty: 4,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(473, 158),
                 qty: 12,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(100, 100),
                 qty: 8,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(742, 473),
                 qty: 8,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
         ];
         let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
         assert_eq!(total_pieces, 36);
 
-        let sol_auto = Solver::new(stock, 3, CutDirection::Auto, demands.clone()).solve();
-        let sol_length = Solver::new(stock, 3, CutDirection::AlongLength, demands.clone()).solve();
-        let sol_width = Solver::new(stock, 3, CutDirection::AlongWidth, demands.clone()).solve();
+        let sol_auto = Solver::new(
+            stock,
+            3,
+            CutDirection::Auto,
+            StockGrain::None,
+            demands.clone(),
+        )
+        .solve();
+        let sol_length = Solver::new(
+            stock,
+            3,
+            CutDirection::AlongLength,
+            StockGrain::None,
+            demands.clone(),
+        )
+        .solve();
+        let sol_width = Solver::new(
+            stock,
+            3,
+            CutDirection::AlongWidth,
+            StockGrain::None,
+            demands.clone(),
+        )
+        .solve();
 
         // All solutions must be valid
         assert_solution_valid(&sol_auto, 36);
@@ -805,11 +911,13 @@ mod tests {
                 rect: Rect::new(400, 200),
                 qty: 4,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
             Demand {
                 rect: Rect::new(300, 150),
                 qty: 3,
                 allow_rotate: true,
+                grain: PieceGrain::Auto,
             },
         ];
 
@@ -818,8 +926,232 @@ mod tests {
             CutDirection::AlongLength,
             CutDirection::AlongWidth,
         ] {
-            let sol = Solver::new(stock, 3, dir, demands.clone()).solve();
+            let sol = Solver::new(stock, 3, dir, StockGrain::None, demands.clone()).solve();
             assert_solution_valid(&sol, 7);
+        }
+    }
+
+    // ── Grain direction tests ──────────────────────────────────────
+
+    #[test]
+    fn test_grain_length_along_length_no_rotate() {
+        // Piece grain=Length, stock grain=AlongLength → piece must NOT be rotated
+        let stock = Rect::new(100, 50);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::AlongLength,
+            vec![Demand {
+                rect: Rect::new(100, 50),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Length,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        assert!(!sol.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_grain_length_along_width_force_rotate() {
+        // Piece grain=Length, stock grain=AlongWidth → piece MUST be rotated
+        // Stock 100x50, piece 50x100: needs rotation to fit (50x100 rotated → 100x50)
+        let stock = Rect::new(100, 50);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::AlongWidth,
+            vec![Demand {
+                rect: Rect::new(50, 100),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Length,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        assert!(sol.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_grain_width_along_length_force_rotate() {
+        // Piece grain=Width, stock grain=AlongLength → piece MUST be rotated
+        // Stock 100x50, piece 50x100: rotated → 100x50 fits
+        let stock = Rect::new(100, 50);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::AlongLength,
+            vec![Demand {
+                rect: Rect::new(50, 100),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Width,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        assert!(sol.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_grain_width_along_width_no_rotate() {
+        // Piece grain=Width, stock grain=AlongWidth → piece must NOT be rotated
+        let stock = Rect::new(100, 50);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::AlongWidth,
+            vec![Demand {
+                rect: Rect::new(100, 50),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Width,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        assert!(!sol.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_grain_auto_free_rotation() {
+        // Piece grain=Auto with any stock grain → free rotation (optimizer chooses)
+        // Stock 100x50, piece 50x100: only fits rotated
+        let stock = Rect::new(100, 50);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::AlongLength,
+            vec![Demand {
+                rect: Rect::new(50, 100),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        assert!(sol.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_grain_none_stock_ignores_piece_grain() {
+        // stock grain=None → all piece grains ignored, free rotation
+        // Piece 50x100 with grain=Length in stock 100x50: should still rotate to fit
+        let stock = Rect::new(100, 50);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::None,
+            vec![Demand {
+                rect: Rect::new(50, 100),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Length,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        // With grain=None, optimizer is free to rotate — and must rotate to fit
+        assert!(sol.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_grain_constraint_reduces_flexibility() {
+        // With grain constraints, some pieces lose rotation flexibility → may need more sheets
+        let stock = Rect::new(200, 100);
+        // Two 100x200 pieces: without grain, both rotate to 200x100 and fit on 1 sheet each
+        // With grain=Length + stock=AlongLength → NoRotate → 100x200 doesn't fit in 200x100 stock
+        // because piece.length=100 < stock.length=200 ✓ but piece.width=200 > stock.width=100 ✗
+        // So each piece must be ForceRotated or can't be placed depending on grain
+        let solver_no_grain = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::None,
+            vec![Demand {
+                rect: Rect::new(100, 200),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            }],
+        );
+        let sol_free = solver_no_grain.solve();
+        assert_solution_valid(&sol_free, 1);
+        // Piece 100x200 rotated → 200x100, fits in 200x100 stock
+        assert!(sol_free.sheets[0].placements[0].rotated);
+
+        // With grain=Length + stock=AlongLength → NoRotate: 100x200 doesn't fit (width 200 > stock width 100)
+        // This would panic at "piece larger than stock" — so use grain=Width to force rotate
+        let solver_grain = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::AlongLength,
+            vec![Demand {
+                rect: Rect::new(100, 200),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Width,
+            }],
+        );
+        let sol_grain = solver_grain.solve();
+        assert_solution_valid(&sol_grain, 1);
+        // ForceRotate: 100x200 rotated → 200x100 fits
+        assert!(sol_grain.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_grain_mixed_pieces() {
+        // Mix of grain-constrained and auto pieces
+        let stock = Rect::new(2440, 1220);
+        let demands = vec![
+            Demand {
+                rect: Rect::new(800, 600),
+                qty: 3,
+                allow_rotate: true,
+                grain: PieceGrain::Length, // must align length with stock grain
+            },
+            Demand {
+                rect: Rect::new(400, 300),
+                qty: 4,
+                allow_rotate: true,
+                grain: PieceGrain::Auto, // free rotation
+            },
+            Demand {
+                rect: Rect::new(600, 400),
+                qty: 2,
+                allow_rotate: true,
+                grain: PieceGrain::Width, // must align width with stock grain
+            },
+        ];
+        let total_pieces: u32 = demands.iter().map(|d| d.qty).sum();
+
+        let sol = Solver::new(
+            stock,
+            0,
+            CutDirection::Auto,
+            StockGrain::AlongLength,
+            demands,
+        )
+        .solve();
+        assert_solution_valid(&sol, total_pieces as usize);
+
+        // Verify grain constraints on placements
+        for sheet in &sol.sheets {
+            for p in &sheet.placements {
+                // All pieces should fit within stock
+                assert!(p.x + p.rect.length <= stock.length);
+                assert!(p.y + p.rect.width <= stock.width);
+            }
         }
     }
 }

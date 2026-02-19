@@ -4,14 +4,27 @@ use axum::{
     routing::{get, post},
 };
 use cut_optimizer::solver::Solver;
-use cut_optimizer::types::{CutDirection, Demand, Rect, Solution, deserialize_u32_from_number};
+use cut_optimizer::types::{
+    CutDirection, Demand, PieceGrain, Rect, RotationConstraint, Solution, StockGrain,
+    deserialize_u32_from_number,
+};
 use serde::{Deserialize, Serialize};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 #[derive(Deserialize, Serialize)]
+struct StockRequest {
+    #[serde(deserialize_with = "deserialize_u32_from_number")]
+    length: u32,
+    #[serde(deserialize_with = "deserialize_u32_from_number")]
+    width: u32,
+    #[serde(default)]
+    grain: StockGrain,
+}
+
+#[derive(Deserialize, Serialize)]
 struct OptimizeRequest {
-    stock: Rect,
+    stock: StockRequest,
     cuts: Vec<CutRequest>,
     #[serde(default, deserialize_with = "deserialize_u32_from_number")]
     kerf: u32,
@@ -26,6 +39,8 @@ struct CutRequest {
     rect: Rect,
     #[serde(deserialize_with = "deserialize_u32_from_number")]
     qty: u32,
+    #[serde(default)]
+    grain: PieceGrain,
 }
 
 fn default_true() -> bool {
@@ -54,7 +69,10 @@ async fn optimize(
         "POST /optimize"
     );
 
-    if req.stock.length == 0 || req.stock.width == 0 {
+    let stock = Rect::new(req.stock.length, req.stock.width);
+    let stock_grain = req.stock.grain;
+
+    if stock.length == 0 || stock.width == 0 {
         return Err((
             StatusCode::BAD_REQUEST,
             "stock dimensions must be non-zero".to_string(),
@@ -71,24 +89,31 @@ async fn optimize(
             if c.qty == 0 {
                 return Err("cut quantity must be non-zero".to_string());
             }
-            let fits_normal = c.rect.fits_in(&req.stock);
-            let fits_rotated = req.allow_rotate && c.rect.rotated().fits_in(&req.stock);
-            if !fits_normal && !fits_rotated {
+            let rotation = RotationConstraint::from_grain(stock_grain, c.grain, req.allow_rotate);
+            let fits = match rotation {
+                RotationConstraint::NoRotate => c.rect.fits_in(&stock),
+                RotationConstraint::ForceRotate => c.rect.rotated().fits_in(&stock),
+                RotationConstraint::Free => {
+                    c.rect.fits_in(&stock) || c.rect.rotated().fits_in(&stock)
+                }
+            };
+            if !fits {
                 return Err(format!(
                     "piece {}x{} does not fit in stock {}x{}",
-                    c.rect.length, c.rect.width, req.stock.length, req.stock.width
+                    c.rect.length, c.rect.width, stock.length, stock.width
                 ));
             }
             Ok(Demand {
                 rect: c.rect,
                 qty: c.qty,
                 allow_rotate: req.allow_rotate,
+                grain: c.grain,
             })
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
-    let solver = Solver::new(req.stock, req.kerf, req.cut_direction, demands);
+    let solver = Solver::new(stock, req.kerf, req.cut_direction, stock_grain, demands);
     let solution: Solution = solver.solve();
 
     let response = OptimizeResponse {

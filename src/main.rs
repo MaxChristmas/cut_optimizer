@@ -1,7 +1,7 @@
 use clap::Parser;
 use cut_optimizer::render;
 use cut_optimizer::solver::Solver;
-use cut_optimizer::types::{CutDirection, Demand, Rect};
+use cut_optimizer::types::{CutDirection, Demand, PieceGrain, Rect, StockGrain};
 
 #[derive(Parser)]
 #[command(
@@ -79,6 +79,7 @@ fn parse_cut(s: &str, allow_rotate: bool) -> Result<Demand, String> {
         rect,
         qty,
         allow_rotate,
+        grain: PieceGrain::Auto,
     })
 }
 
@@ -110,7 +111,13 @@ fn main() {
         }
     }
 
-    let solver = Solver::new(stock, cli.kerf, cli.cut_direction, demands);
+    let solver = Solver::new(
+        stock,
+        cli.kerf,
+        cli.cut_direction,
+        StockGrain::None,
+        demands,
+    );
     let solution = solver.solve();
 
     // Output results

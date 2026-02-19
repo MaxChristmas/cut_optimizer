@@ -62,6 +62,50 @@ pub enum CutDirection {
     AlongWidth,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StockGrain {
+    #[default]
+    None,
+    AlongLength,
+    AlongWidth,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PieceGrain {
+    #[default]
+    Auto,
+    Length,
+    Width,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotationConstraint {
+    Free,
+    NoRotate,
+    ForceRotate,
+}
+
+impl RotationConstraint {
+    pub fn from_grain(
+        stock_grain: StockGrain,
+        piece_grain: PieceGrain,
+        allow_rotate: bool,
+    ) -> Self {
+        if !allow_rotate {
+            return Self::NoRotate;
+        }
+        match (stock_grain, piece_grain) {
+            (StockGrain::None, _) | (_, PieceGrain::Auto) => Self::Free,
+            (StockGrain::AlongLength, PieceGrain::Length)
+            | (StockGrain::AlongWidth, PieceGrain::Width) => Self::NoRotate,
+            (StockGrain::AlongLength, PieceGrain::Width)
+            | (StockGrain::AlongWidth, PieceGrain::Length) => Self::ForceRotate,
+        }
+    }
+}
+
 impl std::fmt::Display for Rect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}x{}", self.length, self.width)
@@ -73,6 +117,8 @@ pub struct Demand {
     pub rect: Rect,
     pub qty: u32,
     pub allow_rotate: bool,
+    #[serde(default)]
+    pub grain: PieceGrain,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -114,5 +160,65 @@ impl Solution {
             return 0.0;
         }
         (total_stock_area - total_used) as f64 / total_stock_area as f64 * 100.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rotation_constraint_from_grain() {
+        use RotationConstraint::*;
+
+        // allow_rotate=false always → NoRotate
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongLength, PieceGrain::Length, false),
+            NoRotate
+        );
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongWidth, PieceGrain::Width, false),
+            NoRotate
+        );
+
+        // stock grain=None → Free regardless of piece grain
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::None, PieceGrain::Length, true),
+            Free
+        );
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::None, PieceGrain::Width, true),
+            Free
+        );
+
+        // piece grain=Auto → Free regardless of stock grain
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongLength, PieceGrain::Auto, true),
+            Free
+        );
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongWidth, PieceGrain::Auto, true),
+            Free
+        );
+
+        // Natural alignment → NoRotate
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongLength, PieceGrain::Length, true),
+            NoRotate
+        );
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongWidth, PieceGrain::Width, true),
+            NoRotate
+        );
+
+        // Cross alignment → ForceRotate
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongLength, PieceGrain::Width, true),
+            ForceRotate
+        );
+        assert_eq!(
+            RotationConstraint::from_grain(StockGrain::AlongWidth, PieceGrain::Length, true),
+            ForceRotate
+        );
     }
 }

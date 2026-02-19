@@ -1,4 +1,4 @@
-use crate::types::{CutDirection, Placement, Rect};
+use crate::types::{CutDirection, Placement, Rect, RotationConstraint};
 
 #[derive(Debug, Clone, Copy)]
 pub struct FreeRect {
@@ -54,14 +54,17 @@ impl GuillotineBin {
     pub fn find_best(
         &self,
         piece: Rect,
-        allow_rotate: bool,
+        rotation: RotationConstraint,
         score_strategy: ScoreStrategy,
     ) -> Option<ScoredPlacement> {
+        let try_normal = rotation != RotationConstraint::ForceRotate;
+        let try_rotated = rotation != RotationConstraint::NoRotate;
+
         let mut best: Option<ScoredPlacement> = None;
 
         for (idx, free) in self.free_rects.iter().enumerate() {
             // Try normal orientation
-            if piece.fits_in(&free.rect) {
+            if try_normal && piece.fits_in(&free.rect) {
                 let score = Self::score(piece, free.rect, score_strategy);
                 if best.is_none() || score < best.unwrap().score {
                     best = Some(ScoredPlacement {
@@ -72,7 +75,7 @@ impl GuillotineBin {
                 }
             }
             // Try rotated
-            if allow_rotate {
+            if try_rotated {
                 let rotated = piece.rotated();
                 if rotated.fits_in(&free.rect) {
                     let score = Self::score(rotated, free.rect, score_strategy);
@@ -262,7 +265,11 @@ mod tests {
         let mut bin = GuillotineBin::new(Rect::new(100, 100), 0, CutDirection::Auto);
         let piece = Rect::new(50, 30);
         let scored = bin
-            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit,
+            )
             .unwrap();
         let p = bin.place(scored, piece);
         assert_eq!(p.x, 0);
@@ -277,8 +284,12 @@ mod tests {
         let bin = GuillotineBin::new(Rect::new(100, 100), 0, CutDirection::Auto);
         let piece = Rect::new(200, 50);
         assert!(
-            bin.find_best(piece, false, ScoreStrategy::BestAreaFit)
-                .is_none()
+            bin.find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit
+            )
+            .is_none()
         );
     }
 
@@ -288,12 +299,16 @@ mod tests {
         let piece = Rect::new(50, 100);
         // Doesn't fit without rotation
         assert!(
-            bin.find_best(piece, false, ScoreStrategy::BestAreaFit)
-                .is_none()
+            bin.find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit
+            )
+            .is_none()
         );
         // Fits with rotation
         let scored = bin
-            .find_best(piece, true, ScoreStrategy::BestAreaFit)
+            .find_best(piece, RotationConstraint::Free, ScoreStrategy::BestAreaFit)
             .unwrap();
         assert!(scored.rotated);
     }
@@ -303,7 +318,11 @@ mod tests {
         let mut bin = GuillotineBin::new(Rect::new(100, 100), 5, CutDirection::Auto);
         let piece = Rect::new(50, 100);
         let scored = bin
-            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit,
+            )
             .unwrap();
         bin.place(scored, piece);
         // Remaining width should be 100 - 50 - 5 = 45
@@ -316,7 +335,11 @@ mod tests {
         let mut bin = GuillotineBin::new(Rect::new(100, 100), 0, CutDirection::Auto);
         let piece = Rect::new(100, 100);
         let scored = bin
-            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit,
+            )
             .unwrap();
         bin.place(scored, piece);
         assert!(bin.free_rects.is_empty());
@@ -336,7 +359,11 @@ mod tests {
 
         let mut bin = GuillotineBin::new(stock, 0, CutDirection::AlongLength);
         let scored = bin
-            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit,
+            )
             .unwrap();
         bin.place(scored, piece);
 
@@ -364,7 +391,11 @@ mod tests {
 
         let mut bin = GuillotineBin::new(stock, 0, CutDirection::AlongWidth);
         let scored = bin
-            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit,
+            )
             .unwrap();
         bin.place(scored, piece);
 
@@ -392,13 +423,21 @@ mod tests {
 
         let mut bin_length = GuillotineBin::new(stock, 0, CutDirection::AlongLength);
         let scored = bin_length
-            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit,
+            )
             .unwrap();
         bin_length.place(scored, piece);
 
         let mut bin_width = GuillotineBin::new(stock, 0, CutDirection::AlongWidth);
         let scored = bin_width
-            .find_best(piece, false, ScoreStrategy::BestAreaFit)
+            .find_best(
+                piece,
+                RotationConstraint::NoRotate,
+                ScoreStrategy::BestAreaFit,
+            )
             .unwrap();
         bin_width.place(scored, piece);
 
@@ -418,5 +457,30 @@ mod tests {
             rects_length, rects_width,
             "AlongLength and AlongWidth must produce different free rect splits"
         );
+    }
+
+    #[test]
+    fn test_force_rotate() {
+        let bin = GuillotineBin::new(Rect::new(100, 50), 0, CutDirection::Auto);
+        let piece = Rect::new(100, 50);
+        // ForceRotate: only tries rotated orientation (50x100 doesn't fit in 100x50)
+        assert!(
+            bin.find_best(
+                piece,
+                RotationConstraint::ForceRotate,
+                ScoreStrategy::BestAreaFit
+            )
+            .is_none()
+        );
+        // A piece that fits when rotated
+        let piece2 = Rect::new(50, 100);
+        let scored = bin
+            .find_best(
+                piece2,
+                RotationConstraint::ForceRotate,
+                ScoreStrategy::BestAreaFit,
+            )
+            .unwrap();
+        assert!(scored.rotated);
     }
 }
