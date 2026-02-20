@@ -1,7 +1,9 @@
 use clap::Parser;
 use cut_optimizer::render;
 use cut_optimizer::solver::Solver;
-use cut_optimizer::types::{CutDirection, Demand, PieceGrain, Rect, StockGrain};
+use cut_optimizer::types::{
+    CutDirection, Demand, PieceGrain, Rect, RotationConstraint, StockGrain,
+};
 
 #[derive(Parser)]
 #[command(
@@ -101,11 +103,16 @@ fn main() {
             std::process::exit(1);
         });
 
-    // Validate all pieces fit in stock (considering rotation)
+    // Validate all pieces fit in stock (considering rotation and cut direction)
     for d in &demands {
-        let fits_normal = d.rect.fits_in(&stock);
-        let fits_rotated = d.allow_rotate && d.rect.rotated().fits_in(&stock);
-        if !fits_normal && !fits_rotated {
+        let rotation = RotationConstraint::from_grain(StockGrain::None, d.grain, d.allow_rotate)
+            .with_cut_direction(cli.cut_direction, d.rect);
+        let fits = match rotation {
+            RotationConstraint::NoRotate => d.rect.fits_in(&stock),
+            RotationConstraint::ForceRotate => d.rect.rotated().fits_in(&stock),
+            RotationConstraint::Free => d.rect.fits_in(&stock) || d.rect.rotated().fits_in(&stock),
+        };
+        if !fits {
             eprintln!("Error: piece {} does not fit in stock {}", d.rect, stock);
             std::process::exit(1);
         }

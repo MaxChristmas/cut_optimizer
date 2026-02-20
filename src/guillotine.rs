@@ -206,7 +206,9 @@ impl GuillotineBin {
             merged = false;
             'outer: for i in 0..self.free_rects.len() {
                 for j in (i + 1)..self.free_rects.len() {
-                    if let Some(m) = Self::try_merge(self.free_rects[i], self.free_rects[j]) {
+                    if let Some(m) =
+                        Self::try_merge(self.free_rects[i], self.free_rects[j], self.cut_direction)
+                    {
                         self.free_rects[i] = m;
                         self.free_rects.swap_remove(j);
                         merged = true;
@@ -217,9 +219,10 @@ impl GuillotineBin {
         }
     }
 
-    fn try_merge(a: FreeRect, b: FreeRect) -> Option<FreeRect> {
+    fn try_merge(a: FreeRect, b: FreeRect, cut_direction: CutDirection) -> Option<FreeRect> {
         // Merge horizontally: same y, same width, adjacent x
-        if a.y == b.y && a.rect.width == b.rect.width {
+        // Disabled for AlongWidth to preserve column boundaries
+        if cut_direction != CutDirection::AlongWidth && a.y == b.y && a.rect.width == b.rect.width {
             if a.x + a.rect.length == b.x {
                 return Some(FreeRect {
                     x: a.x,
@@ -236,7 +239,11 @@ impl GuillotineBin {
             }
         }
         // Merge vertically: same x, same length, adjacent y
-        if a.x == b.x && a.rect.length == b.rect.length {
+        // Disabled for AlongLength to preserve row boundaries
+        if cut_direction != CutDirection::AlongLength
+            && a.x == b.x
+            && a.rect.length == b.rect.length
+        {
             if a.y + a.rect.width == b.y {
                 return Some(FreeRect {
                     x: a.x,

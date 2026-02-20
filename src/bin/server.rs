@@ -89,7 +89,8 @@ async fn optimize(
             if c.qty == 0 {
                 return Err("cut quantity must be non-zero".to_string());
             }
-            let rotation = RotationConstraint::from_grain(stock_grain, c.grain, req.allow_rotate);
+            let rotation = RotationConstraint::from_grain(stock_grain, c.grain, req.allow_rotate)
+                .with_cut_direction(req.cut_direction, c.rect);
             let fits = match rotation {
                 RotationConstraint::NoRotate => c.rect.fits_in(&stock),
                 RotationConstraint::ForceRotate => c.rect.rotated().fits_in(&stock),

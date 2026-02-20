@@ -54,7 +54,8 @@ impl Solver {
         let mut pieces = Vec::new();
         for d in &self.demands {
             let rotation =
-                RotationConstraint::from_grain(self.stock_grain, d.grain, d.allow_rotate);
+                RotationConstraint::from_grain(self.stock_grain, d.grain, d.allow_rotate)
+                    .with_cut_direction(self.cut_direction, d.rect);
             for _ in 0..d.qty {
                 pieces.push((d.rect, rotation));
             }
@@ -1107,6 +1108,168 @@ mod tests {
         assert_solution_valid(&sol_grain, 1);
         // ForceRotate: 100x200 rotated → 200x100 fits
         assert!(sol_grain.sheets[0].placements[0].rotated);
+    }
+
+    // ── Cut direction rotation constraint tests ──────────────────
+
+    #[test]
+    fn test_cut_direction_along_length_forces_orientation() {
+        // AlongLength: pieces should be oriented with length >= width.
+        // Piece 30x50 (length < width) → ForceRotate → placed as 50x30.
+        let stock = Rect::new(100, 100);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::AlongLength,
+            StockGrain::None,
+            vec![Demand {
+                rect: Rect::new(30, 50),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        let p = &sol.sheets[0].placements[0];
+        // After forced rotation: placed length=50, width=30
+        assert!(
+            p.rect.length >= p.rect.width,
+            "AlongLength: placed piece should have length >= width, got {}x{}",
+            p.rect.length,
+            p.rect.width
+        );
+    }
+
+    #[test]
+    fn test_cut_direction_along_width_forces_orientation() {
+        // AlongWidth: pieces should be oriented with width >= length.
+        // Piece 50x30 (width < length) → ForceRotate → placed as 30x50.
+        let stock = Rect::new(100, 100);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::AlongWidth,
+            StockGrain::None,
+            vec![Demand {
+                rect: Rect::new(50, 30),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        let p = &sol.sheets[0].placements[0];
+        // After forced rotation: placed width=50, length=30
+        assert!(
+            p.rect.width >= p.rect.length,
+            "AlongWidth: placed piece should have width >= length, got {}x{}",
+            p.rect.length,
+            p.rect.width
+        );
+    }
+
+    #[test]
+    fn test_cut_direction_grain_takes_priority() {
+        // Grain constraint (NoRotate) should override cut_direction.
+        // Piece 30x50 with grain=Length, stock=AlongLength → NoRotate (natural alignment)
+        // Even though AlongLength would want ForceRotate for this piece shape.
+        let stock = Rect::new(100, 100);
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::AlongLength,
+            StockGrain::AlongLength,
+            vec![Demand {
+                rect: Rect::new(30, 50),
+                qty: 1,
+                allow_rotate: true,
+                grain: PieceGrain::Length,
+            }],
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 1);
+        // Grain=Length + Stock=AlongLength → NoRotate, so piece stays 30x50
+        assert!(!sol.sheets[0].placements[0].rotated);
+    }
+
+    #[test]
+    fn test_cut_direction_along_length_all_pieces_oriented() {
+        // Multiple non-square pieces with AlongLength: all should be placed length >= width
+        let stock = Rect::new(2440, 1220);
+        let demands = vec![
+            Demand {
+                rect: Rect::new(800, 600),
+                qty: 3,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            },
+            Demand {
+                rect: Rect::new(300, 500),
+                qty: 4,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            },
+        ];
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::AlongLength,
+            StockGrain::None,
+            demands,
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 7);
+        for sheet in &sol.sheets {
+            for p in &sheet.placements {
+                assert!(
+                    p.rect.length >= p.rect.width,
+                    "AlongLength: all placed pieces should have length >= width, got {}x{}",
+                    p.rect.length,
+                    p.rect.width
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_cut_direction_along_width_all_pieces_oriented() {
+        // Multiple non-square pieces with AlongWidth: all should be placed width >= length
+        let stock = Rect::new(2440, 1220);
+        let demands = vec![
+            Demand {
+                rect: Rect::new(800, 600),
+                qty: 3,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            },
+            Demand {
+                rect: Rect::new(300, 500),
+                qty: 4,
+                allow_rotate: true,
+                grain: PieceGrain::Auto,
+            },
+        ];
+        let solver = Solver::new(
+            stock,
+            0,
+            CutDirection::AlongWidth,
+            StockGrain::None,
+            demands,
+        );
+        let sol = solver.solve();
+        assert_solution_valid(&sol, 7);
+        for sheet in &sol.sheets {
+            for p in &sheet.placements {
+                assert!(
+                    p.rect.width >= p.rect.length,
+                    "AlongWidth: all placed pieces should have width >= length, got {}x{}",
+                    p.rect.length,
+                    p.rect.width
+                );
+            }
+        }
     }
 
     #[test]

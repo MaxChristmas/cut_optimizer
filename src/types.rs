@@ -104,6 +104,38 @@ impl RotationConstraint {
             | (StockGrain::AlongWidth, PieceGrain::Length) => Self::ForceRotate,
         }
     }
+
+    /// Tighten rotation constraint based on cut direction preference.
+    /// Only applies when the current constraint is `Free` (grain/no-rotate take priority).
+    ///
+    /// - `AlongLength`: pieces should have length >= width (longer side along length axis).
+    /// - `AlongWidth`: pieces should have width >= length (longer side along width axis).
+    pub fn with_cut_direction(self, cut_direction: CutDirection, piece: Rect) -> Self {
+        if self != Self::Free {
+            return self;
+        }
+        match cut_direction {
+            CutDirection::Auto => Self::Free,
+            CutDirection::AlongLength => {
+                if piece.length > piece.width {
+                    Self::NoRotate
+                } else if piece.length < piece.width {
+                    Self::ForceRotate
+                } else {
+                    Self::Free
+                }
+            }
+            CutDirection::AlongWidth => {
+                if piece.width > piece.length {
+                    Self::NoRotate
+                } else if piece.width < piece.length {
+                    Self::ForceRotate
+                } else {
+                    Self::Free
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for Rect {
@@ -219,6 +251,59 @@ mod tests {
         assert_eq!(
             RotationConstraint::from_grain(StockGrain::AlongWidth, PieceGrain::Length, true),
             ForceRotate
+        );
+    }
+
+    #[test]
+    fn test_with_cut_direction() {
+        use RotationConstraint::*;
+
+        // Non-Free constraints are preserved (grain takes priority)
+        assert_eq!(
+            NoRotate.with_cut_direction(CutDirection::AlongLength, Rect::new(30, 50)),
+            NoRotate
+        );
+        assert_eq!(
+            ForceRotate.with_cut_direction(CutDirection::AlongWidth, Rect::new(50, 30)),
+            ForceRotate
+        );
+
+        // Auto direction → stays Free
+        assert_eq!(
+            Free.with_cut_direction(CutDirection::Auto, Rect::new(50, 30)),
+            Free
+        );
+
+        // AlongLength: piece already has length > width → NoRotate
+        assert_eq!(
+            Free.with_cut_direction(CutDirection::AlongLength, Rect::new(50, 30)),
+            NoRotate
+        );
+        // AlongLength: piece has length < width → ForceRotate
+        assert_eq!(
+            Free.with_cut_direction(CutDirection::AlongLength, Rect::new(30, 50)),
+            ForceRotate
+        );
+        // AlongLength: square piece → Free
+        assert_eq!(
+            Free.with_cut_direction(CutDirection::AlongLength, Rect::new(50, 50)),
+            Free
+        );
+
+        // AlongWidth: piece already has width > length → NoRotate
+        assert_eq!(
+            Free.with_cut_direction(CutDirection::AlongWidth, Rect::new(30, 50)),
+            NoRotate
+        );
+        // AlongWidth: piece has width < length → ForceRotate
+        assert_eq!(
+            Free.with_cut_direction(CutDirection::AlongWidth, Rect::new(50, 30)),
+            ForceRotate
+        );
+        // AlongWidth: square piece → Free
+        assert_eq!(
+            Free.with_cut_direction(CutDirection::AlongWidth, Rect::new(50, 50)),
+            Free
         );
     }
 }
