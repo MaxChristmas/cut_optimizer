@@ -136,6 +136,14 @@ async fn optimize(
 
 #[tokio::main]
 async fn main() {
+    let _sentry_guard = std::env::var("SENTRY_DSN").ok().map(|dsn| {
+        sentry::init((dsn, sentry::ClientOptions {
+            release: sentry::release_name!(),
+            send_default_pii: true,
+            ..Default::default()
+        }))
+    });
+
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

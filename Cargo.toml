@@ -12,6 +12,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+sentry = "0.46.2"
 
 [[bin]]
 name = "cut_optimizer"
