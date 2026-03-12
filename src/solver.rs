@@ -82,7 +82,23 @@ impl Solver {
         for &dir in &directions {
             for &strategy in &strategies {
                 let sol = self.greedy_solve(pieces, strategy, dir);
-                if best.is_none() || sol.sheets.len() < best.as_ref().unwrap().sheets.len() {
+                let dominated = match &best {
+                    None => false,
+                    Some(prev) => {
+                        let prev_n = prev.sheets.len();
+                        let sol_n = sol.sheets.len();
+                        if sol_n < prev_n {
+                            false
+                        } else if sol_n > prev_n {
+                            true
+                        } else {
+                            // Same sheet count: prefer more compact last sheet
+                            Self::last_sheet_bounding_area(&sol)
+                                >= Self::last_sheet_bounding_area(prev)
+                        }
+                    }
+                };
+                if !dominated {
                     best = Some(sol);
                 }
             }
@@ -250,6 +266,26 @@ impl Solver {
                 }
             }
         }
+    }
+
+    /// Bounding box area of the last sheet's placements.
+    /// Used as tiebreaker: smaller means more compact layout.
+    fn last_sheet_bounding_area(sol: &Solution) -> u64 {
+        sol.sheets.last().map_or(0, |sheet| {
+            let max_x = sheet
+                .placements
+                .iter()
+                .map(|p| p.x + p.rect.length)
+                .max()
+                .unwrap_or(0);
+            let max_y = sheet
+                .placements
+                .iter()
+                .map(|p| p.y + p.rect.width)
+                .max()
+                .unwrap_or(0);
+            max_x as u64 * max_y as u64
+        })
     }
 
     fn bins_to_solution(&self, bins: Vec<GuillotineBin>) -> Solution {

@@ -1,3 +1,4 @@
 /target
 development.log
 .env
+.DS_Store
