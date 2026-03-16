@@ -51,11 +51,26 @@ cargo run --bin server
 # Ecoute sur 0.0.0.0:3001 (configurable via $PORT)
 ```
 
-Endpoint `POST /optimize` avec un body JSON :
+Routes :
+
+| Methode | Chemin | Description |
+|---|---|---|
+| `GET` | `/up` | Health check, retourne `"ok"` |
+| `POST` | `/optimize` | Lance l'optimisation, retourne le plan de decoupe |
+
+---
+
+## API — Contrat JSON
+
+### Requete `POST /optimize`
 
 ```json
 {
-  "stock": { "length": 2400, "width": 1200, "grain": "none" },
+  "stock": {
+    "length": 2400,
+    "width": 1200,
+    "grain": "none"
+  },
   "cuts": [
     { "rect": { "length": 800, "width": 600 }, "qty": 3, "grain": "auto" },
     { "rect": { "length": 400, "width": 300 }, "qty": 5, "grain": "auto" }
@@ -65,6 +80,90 @@ Endpoint `POST /optimize` avec un body JSON :
   "allow_rotate": true
 }
 ```
+
+#### Champs de la requete
+
+| Champ | Type | Requis | Defaut | Description |
+|---|---|---|---|---|
+| `stock.length` | `u32` | oui | — | Longueur du panneau de stock (axe X) |
+| `stock.width` | `u32` | oui | — | Largeur du panneau de stock (axe Y) |
+| `stock.grain` | `string` | non | `"none"` | Sens du fil du panneau : `"none"`, `"along_length"`, `"along_width"` |
+| `cuts[].rect.length` | `u32` | oui | — | Longueur de la piece |
+| `cuts[].rect.width` | `u32` | oui | — | Largeur de la piece |
+| `cuts[].qty` | `u32` | oui | — | Nombre d'exemplaires |
+| `cuts[].grain` | `string` | non | `"auto"` | Sens du fil de la piece : `"auto"`, `"length"`, `"width"` |
+| `kerf` | `u32` | non | `0` | Largeur du trait de coupe (soustrait a chaque decoupe) |
+| `cut_direction` | `string` | non | `"auto"` | Direction de coupe : `"auto"`, `"along_length"`, `"along_width"` |
+| `allow_rotate` | `bool` | non | `true` | Autoriser la rotation des pieces a 90 deg. |
+
+> Les champs numeriques acceptent les nombres entiers ou les nombres flottants sans decimales (ex: `3` ou `3.0`).
+
+#### Valeurs des enums
+
+| Enum | Valeurs | Description |
+|---|---|---|
+| `stock.grain` | `none` | Pas de fil (rotation libre) |
+| | `along_length` | Fil parallele a la longueur |
+| | `along_width` | Fil parallele a la largeur |
+| `cuts[].grain` | `auto` | Pas de contrainte de fil sur la piece |
+| | `length` | Le cote "length" de la piece doit s'aligner avec le fil du stock |
+| | `width` | Le cote "width" de la piece doit s'aligner avec le fil du stock |
+| `cut_direction` | `auto` | Teste les deux directions, garde la meilleure |
+| | `along_length` | Coupes horizontales, pieces orientees longueur >= largeur |
+| | `along_width` | Coupes verticales, pieces orientees largeur >= longueur |
+
+#### Validations (erreurs 400)
+
+- `stock.length` et `stock.width` doivent etre > 0.
+- `cuts[].rect.length` et `cuts[].rect.width` doivent etre > 0.
+- `cuts[].qty` doit etre > 0.
+- Chaque piece doit rentrer dans le stock (en tenant compte de la rotation et du grain). Sinon : `"piece LxW does not fit in stock LxW"`.
+
+### Reponse `POST /optimize`
+
+```json
+{
+  "stock": { "length": 2400, "width": 1200 },
+  "sheet_count": 2,
+  "waste_percent": 47.2,
+  "sheets": [
+    {
+      "waste_area": 1528000,
+      "placements": [
+        {
+          "rect": { "length": 1000, "width": 500 },
+          "x": 0,
+          "y": 0,
+          "rotated": true
+        },
+        {
+          "rect": { "length": 800, "width": 600 },
+          "x": 502,
+          "y": 0,
+          "rotated": false
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### Champs de la reponse
+
+| Champ | Type | Description |
+|---|---|---|
+| `stock` | `Rect` | Dimensions du panneau de stock utilise |
+| `sheet_count` | `usize` | Nombre total de panneaux utilises |
+| `waste_percent` | `f64` | Pourcentage de chute global (0-100) |
+| `sheets[]` | `array` | Liste des panneaux avec leurs placements |
+| `sheets[].waste_area` | `u64` | Surface de chute sur ce panneau (stock_area - somme des pieces) |
+| `sheets[].placements[]` | `array` | Liste des pieces placees sur ce panneau |
+| `sheets[].placements[].rect` | `Rect` | Dimensions de la piece **telle que placee** (apres rotation eventuelle) |
+| `sheets[].placements[].x` | `u32` | Position X sur le panneau (axe longueur, depuis le bord gauche) |
+| `sheets[].placements[].y` | `u32` | Position Y sur le panneau (axe largeur, depuis le bord haut) |
+| `sheets[].placements[].rotated` | `bool` | `true` si la piece a ete tournee de 90 deg. par rapport a la demande |
+
+> `rect` dans la reponse contient les dimensions **apres rotation** : si `rotated: true`, length et width sont inverses par rapport a la demande d'origine.
 
 ### Format de sortie (CLI)
 
@@ -96,7 +195,7 @@ Contraintes de rotation (grain + direction de coupe)
   |
   v
 Solver
-  |-- Phase 1 : Greedy (3 strategies, garde la meilleure)
+  |-- Phase 1 : Greedy (3 strategies x 2 directions, garde la meilleure)
   |-- Phase 2 : Branch & Bound (amelioration, <= 20 pieces)
   |
   v
@@ -136,6 +235,10 @@ Pour chaque espace libre, les deux orientations de la piece (normale et tournee 
 
 En mode `auto` pour la direction de coupe, les directions `along-length` et `along-width` sont egalement testees, ce qui donne jusqu'a 6 variantes (3 strategies x 2 directions).
 
+#### Departage a nombre de panneaux egal
+
+Quand plusieurs strategies/directions produisent le meme nombre de panneaux, le solveur prefere la solution dont le **dernier panneau a la bounding box la plus compacte** (plus petite surface englobante des pieces placees). Cela evite les dispositions en L peu pratiques et favorise des placements alignes sur le dernier panneau.
+
 ### Etape 3 — Guillotine Bin Packing
 
 C'est le moteur de placement 2D. Chaque panneau est gere comme un ensemble de **rectangles libres**.
@@ -173,11 +276,11 @@ Les deux phases utilisent la guillotine de la meme facon pour placer et decouper
 
 ```
 Greedy :                          Branch & Bound :
-Piece 1 → meilleur espace → ok   Piece 1 → essai orientation A
-Piece 2 → meilleur espace → ok     Piece 2 → dans panneau 1 → ok
-Piece 3 → ne rentre pas           Piece 3 → ne rentre pas → RETOUR
-        → nouveau panneau              Piece 2 → essai orientation B
-                                         Piece 3 → rentre ! → 1 panneau
+Piece 1 -> meilleur espace -> ok   Piece 1 -> essai orientation A
+Piece 2 -> meilleur espace -> ok     Piece 2 -> dans panneau 1 -> ok
+Piece 3 -> ne rentre pas           Piece 3 -> ne rentre pas -> RETOUR
+        -> nouveau panneau              Piece 2 -> essai orientation B
+                                         Piece 3 -> rentre ! -> 1 panneau
 ```
 
 | | Greedy | Branch & Bound |
@@ -221,6 +324,19 @@ src/
   guillotine.rs    # Moteur de placement 2D (split, merge, scoring)
   render.rs        # Rendu ASCII des panneaux
 ```
+
+### Systeme de coordonnees
+
+- **x** : axe longueur (horizontal), de gauche a droite.
+- **y** : axe largeur (vertical), de haut en bas.
+- L'origine `(0, 0)` est en haut a gauche du panneau.
+- Une piece placee a `(x, y)` occupe la zone `[x, x+length) x [y, y+width)`.
+
+### Conventions sur les dimensions
+
+- `length` = dimension le long de l'axe X (horizontal).
+- `width` = dimension le long de l'axe Y (vertical).
+- Quand `rotated: true`, length et width sont inverses : la piece d'origine `{length: L, width: W}` est placee comme `{length: W, width: L}`.
 
 ## Developpement
 
