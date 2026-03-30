@@ -144,14 +144,8 @@ async fn main() {
         }))
     });
 
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("development.log")
-        .expect("failed to open development.log");
-
     tracing_subscriber::fmt()
-        .with_writer(log_file)
+        .with_writer(std::io::stderr)
         .with_target(false)
         .with_ansi(false)
         .with_max_level(Level::INFO)
