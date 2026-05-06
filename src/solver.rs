@@ -2,6 +2,12 @@ use crate::guillotine::{GuillotineBin, ScoreStrategy};
 use crate::types::{
     CutDirection, Demand, Rect, RotationConstraint, SheetResult, Solution, StockGrain,
 };
+use std::time::{Duration, Instant};
+
+// Hard cap on B&B exploration. Search space is exponential and certain inputs
+// (e.g. 20 nearly-identical long pieces) take hours without this. Past the budget
+// we abandon and fall back to the greedy result.
+const BB_TIME_BUDGET: Duration = Duration::from_secs(5);
 
 pub struct Solver {
     stock: Rect,
@@ -167,9 +173,17 @@ impl Solver {
 
         let mut best_bins: Option<Vec<GuillotineBin>> = None;
         let mut best_count = upper_bound;
+        let deadline = Instant::now() + BB_TIME_BUDGET;
 
         let bins: Vec<GuillotineBin> = vec![];
-        self.bb_recurse(pieces, 0, bins, &mut best_bins, &mut best_count);
+        self.bb_recurse(pieces, 0, bins, &mut best_bins, &mut best_count, deadline);
+
+        if Instant::now() >= deadline {
+            tracing::warn!(
+                pieces = pieces.len(),
+                "branch_and_bound time budget exceeded, falling back to greedy"
+            );
+        }
 
         match best_bins {
             Some(bins) => self.bins_to_solution(bins),
@@ -187,7 +201,12 @@ impl Solver {
         bins: Vec<GuillotineBin>,
         best_bins: &mut Option<Vec<GuillotineBin>>,
         best_count: &mut usize,
+        deadline: Instant,
     ) {
+        if Instant::now() >= deadline {
+            return;
+        }
+
         if idx == pieces.len() {
             if bins.len() < *best_count {
                 *best_count = bins.len();
@@ -248,7 +267,7 @@ impl Solver {
                 {
                     let mut new_bins = bins.clone();
                     new_bins[bi].place(scored, try_piece);
-                    self.bb_recurse(pieces, idx + 1, new_bins, best_bins, best_count);
+                    self.bb_recurse(pieces, idx + 1, new_bins, best_bins, best_count, deadline);
                 }
             }
         }
@@ -262,7 +281,7 @@ impl Solver {
                 if let Some(scored) = scored {
                     new_bin.place(scored, piece);
                     new_bins.push(new_bin);
-                    self.bb_recurse(pieces, idx + 1, new_bins, best_bins, best_count);
+                    self.bb_recurse(pieces, idx + 1, new_bins, best_bins, best_count, deadline);
                 }
             }
         }

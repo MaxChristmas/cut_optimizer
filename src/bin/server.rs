@@ -115,7 +115,16 @@ async fn optimize(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     let solver = Solver::new(stock, req.kerf, req.cut_direction, stock_grain, demands);
-    let solution: Solution = solver.solve();
+    // Run the CPU-bound solver on the blocking pool so it cannot starve the tokio runtime
+    // (otherwise a long solve freezes /up and every other request).
+    let solution: Solution = tokio::task::spawn_blocking(move || solver.solve())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("solver task failed: {e}"),
+            )
+        })?;
 
     let response = OptimizeResponse {
         sheets: solution
